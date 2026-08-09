@@ -225,6 +225,8 @@
   let dragTarget = null;     // {type:'line'|'node', axis, idx, pi?} during grid drag
   let lastP = null;          // last pointer pos for whole-line dragging
   let activePointer = null;  // id of the pointer that owns the current interaction (palm rejection)
+  let downX = 0, downY = 0, downT = 0;             // pointer-down info for tap detection
+  let lastTapT = 0, lastTapX = 0, lastTapY = 0;    // last tap for double-tap detection
 
   const el = {
     fileInput: document.getElementById("fileInput"),
@@ -506,6 +508,7 @@
     if (activePointer !== null) return;                          // a pointer is already active -> ignore palm/2nd touch
     activePointer = e.pointerId;
     e.preventDefault();
+    const _dp = toImageCoords(e); downX = _dp.x; downY = _dp.y; downT = performance.now();
     if (mode === "grid") {
       const p = toImageCoords(e), sc = ovScale();
       lastP = p;
@@ -549,6 +552,24 @@
   el.overlay.addEventListener("pointerup", (e) => {
     if (activePointer !== null && e.pointerId !== activePointer) return;
     activePointer = null;
+    // double-tap on a grid line adds a dot (works for mouse, touch & Apple Pencil)
+    if (mode === "grid" && baseImage) {
+      const up = toImageCoords(e);
+      const isTap = Math.hypot(up.x - downX, up.y - downY) < 8 && (performance.now() - downT) < 300;
+      if (isTap) {
+        const now = performance.now();
+        if (now - lastTapT < 350 && Math.hypot(up.x - lastTapX, up.y - lastTapY) < 26) {
+          const hl = hitLine(up, ovScale() * 10, 14);
+          if (hl) {
+            selLine = hl;
+            insertDotAt((hl.axis === "v" ? vlines : hlines)[hl.idx], hl.axis, up);
+            dragTarget = null; lastTapT = 0; redrawOverlay();
+            return;
+          }
+        }
+        lastTapT = now; lastTapX = up.x; lastTapY = up.y;
+      }
+    }
     if (dragTarget) { dragTarget = null; return; }
     if (!drawing) return;
     drawing = false;
@@ -559,19 +580,10 @@
     curRect = null; curPath = null;
     redrawOverlay();
   });
-  el.overlay.addEventListener("dblclick", e => {
-    if (mode !== "grid" || !baseImage) return;
-    const p = toImageCoords(e), sc = ovScale();
-    const hl = hitLine(p, sc * 8, 14);
-    if (!hl) return;
-    selLine = hl;
-    insertDotAt((hl.axis === "v" ? vlines : hlines)[hl.idx], hl.axis, p);
-    redrawOverlay();
-  });
+  el.overlay.addEventListener("pointercancel", () => { activePointer = null; dragTarget = null; drawing = false; });
   // iPad / Apple Pencil: stop the copy/cut/select callout while working on the canvas
   el.overlay.addEventListener("contextmenu", e => e.preventDefault());
   el.overlay.addEventListener("selectstart", e => e.preventDefault());
-  el.overlay.addEventListener("pointercancel", () => { activePointer = null; dragTarget = null; drawing = false; });
 
   // ---------- Overlay rendering ----------
   function redrawOverlay() {

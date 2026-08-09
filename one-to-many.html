@@ -225,8 +225,9 @@
   let dragTarget = null;     // {type:'line'|'node', axis, idx, pi?} during grid drag
   let lastP = null;          // last pointer pos for whole-line dragging
   let activePointer = null;  // id of the pointer that owns the current interaction (palm rejection)
-  let downX = 0, downY = 0, downT = 0;             // pointer-down info for tap detection
-  let lastTapT = 0, lastTapX = 0, lastTapY = 0;    // last tap for double-tap detection
+  let downX = 0, downY = 0, downT = 0;     // pointer-down info for tap detection
+  let movedEnough = false;                 // has the current drag passed the move threshold?
+  let tapWasSelected = false;              // was the tapped line already selected? (tap-again = add dot)
 
   const el = {
     fileInput: document.getElementById("fileInput"),
@@ -266,7 +267,7 @@
   const octx = el.overlay.getContext("2d");
 
   const HINTS = {
-    grid: "Grid mode: ＋V/＋H add straight movable lines (drag to move). Click a line to select, ＋Dot to add points, drag dots to shape, tick Curve to smooth-bend just that line. Then Cut all.",
+    grid: "Grid mode: ＋V/＋H add lines. Tap a line to select it, tap it again to drop a dot; drag lines/dots to shape; tick Curve to smooth-bend. Then Cut all.",
     rect: "Rectangles mode: click-drag to draw a box around each piece. Draw as many as you want, then Cut all.",
     lasso: "Lasso mode: press and drag to trace around a shape, release to close it. Trace each animal, then Cut all.",
   };
@@ -511,12 +512,19 @@
     const _dp = toImageCoords(e); downX = _dp.x; downY = _dp.y; downT = performance.now();
     if (mode === "grid") {
       const p = toImageCoords(e), sc = ovScale();
-      lastP = p;
-      const ni = hitNode(p, sc * 11);
-      if (ni !== null) { dragTarget = { type: "node", axis: selLine.axis, idx: selLine.idx, pi: ni }; el.overlay.setPointerCapture(e.pointerId); return; }
-      const hl = hitLine(p, sc * 8, 14);
-      if (hl) { selLine = hl; dragTarget = { type: "line", axis: hl.axis, idx: hl.idx }; el.overlay.setPointerCapture(e.pointerId); redrawOverlay(); return; }
-      selLine = null; dragTarget = null; redrawOverlay();
+      lastP = p; movedEnough = false;
+      const ni = hitNode(p, sc * 12);
+      if (ni !== null) { dragTarget = { type: "node", axis: selLine.axis, idx: selLine.idx, pi: ni }; tapWasSelected = true; el.overlay.setPointerCapture(e.pointerId); return; }
+      const hl = hitLine(p, sc * 10, 14);
+      if (hl) {
+        tapWasSelected = !!(selLine && selLine.axis === hl.axis && selLine.idx === hl.idx);
+        selLine = hl;
+        dragTarget = { type: "line", axis: hl.axis, idx: hl.idx };
+        el.overlay.setPointerCapture(e.pointerId);
+        redrawOverlay();
+        return;
+      }
+      selLine = null; dragTarget = null; tapWasSelected = false; redrawOverlay();
       return;
     }
     el.overlay.setPointerCapture(e.pointerId);
@@ -530,11 +538,15 @@
     if (mode === "grid") {
       const p = toImageCoords(e);
       if (dragTarget) {
+        if (!movedEnough) {
+          if (Math.hypot(p.x - downX, p.y - downY) < ovScale() * 7) return; // ignore tap jitter (no shaking)
+          movedEnough = true; lastP = p; return;
+        }
         if (dragTarget.type === "node") moveDot(dragTarget, p); else moveWholeLine(dragTarget, p);
         lastP = p; redrawOverlay();
       } else {
         const sc = ovScale();
-        el.overlay.style.cursor = (hitNode(p, sc * 11) !== null || hitLine(p, sc * 8, 14)) ? "move" : "default";
+        el.overlay.style.cursor = (hitNode(p, sc * 12) !== null || hitLine(p, sc * 10, 14)) ? "move" : "default";
       }
       return;
     }
@@ -552,27 +564,14 @@
   el.overlay.addEventListener("pointerup", (e) => {
     if (activePointer !== null && e.pointerId !== activePointer) return;
     activePointer = null;
-    // double-tap on a grid line adds a dot (works for mouse, touch & Apple Pencil).
-    // Thresholds are scaled to the screen (sc), and it falls back to the selected line.
-    if (mode === "grid" && baseImage) {
-      const up = toImageCoords(e);
-      const sc = ovScale();
-      const isTap = Math.hypot(up.x - downX, up.y - downY) < sc * 16 && (performance.now() - downT) < 450;
-      if (isTap) {
-        const now = performance.now();
-        const isDouble = (now - lastTapT < 500) && Math.hypot(up.x - lastTapX, up.y - lastTapY) < sc * 44;
-        if (isDouble) {
-          let hl = hitLine(up, sc * 20, 14);
-          if (!hl && selLine) hl = selLine;      // slightly off the line? use the selected line
-          if (hl) {
-            selLine = hl;
-            insertDotAt((hl.axis === "v" ? vlines : hlines)[hl.idx], hl.axis, up);
-            dragTarget = null; lastTapT = 0; redrawOverlay();
-            return;
-          }
-        }
-        lastTapT = now; lastTapX = up.x; lastTapY = up.y;
+    if (mode === "grid") {
+      // A tap (no real drag) on an already-selected line drops a dot there.
+      if (baseImage && dragTarget && !movedEnough && dragTarget.type === "line" && tapWasSelected) {
+        const up = toImageCoords(e);
+        insertDotAt((dragTarget.axis === "v" ? vlines : hlines)[dragTarget.idx], dragTarget.axis, up);
       }
+      dragTarget = null; movedEnough = false; redrawOverlay();
+      return;
     }
     if (dragTarget) { dragTarget = null; return; }
     if (!drawing) return;

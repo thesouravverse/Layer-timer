@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>One → Many — Image Splitter</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1f2430;
+    --line: #2a3040;
+    --text: #e6e9ef;
+    --muted: #8b93a7;
+    --accent: #5b8cff;
+    --accent-2: #2ec3a6;
+    --danger: #ff5d6c;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
+  header h1 span { color: var(--accent); }
+  .nav-link { color: var(--muted); font-size: 12px; text-decoration: none; border: 1px solid var(--line); padding: 6px 10px; border-radius: 8px; }
+  .nav-link:hover { color: var(--text); border-color: var(--accent); }
+
+  .mode-toggle { display: flex; background: var(--panel-2); border-radius: 999px; padding: 3px; }
+  .mode-toggle button {
+    border: 0; background: transparent; color: var(--muted);
+    padding: 7px 14px; border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 600;
+  }
+  .mode-toggle button.active { background: var(--accent); color: #fff; }
+
+  .spacer { flex: 1; }
+
+  button.btn {
+    border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+    padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  button.btn:hover { border-color: var(--accent); }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.btn.ghost { background: transparent; }
+  button.btn:disabled { opacity: .4; cursor: default; }
+
+  .field-inline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .field-inline input {
+    width: 56px; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 6px 7px; font-size: 13px;
+  }
+
+  main { flex: 1; display: flex; min-height: 0; }
+
+  .editor {
+    flex: 1; display: flex; flex-direction: column; min-width: 0;
+    background: radial-gradient(circle at center, #14171e 0%, #0b0d11 100%);
+  }
+  .stage {
+    flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
+    overflow: auto; padding: 20px;
+  }
+  .canvas-holder { position: relative; line-height: 0; }
+  .canvas-holder canvas { display: block; max-width: 100%; max-height: calc(100vh - 160px); }
+  #overlay { position: absolute; inset: 0; cursor: crosshair; }
+  .stage .placeholder { color: var(--muted); font-size: 14px; text-align: center; line-height: 1.8; }
+  .stage .placeholder b { color: var(--text); }
+  .hint-bar { padding: 8px 16px; font-size: 12px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); }
+  .hint-bar b { color: var(--accent-2); }
+
+  /* Results */
+  aside {
+    width: 320px; min-width: 280px; background: var(--panel);
+    border-left: 1px solid var(--line); display: flex; flex-direction: column;
+  }
+  .res-head { padding: 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  .res-head .count { font-size: 13px; color: var(--muted); }
+  .res-head .count b { color: var(--text); }
+  .res-actions { display: flex; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .res-actions .btn { flex: 1; justify-content: center; }
+  .results { flex: 1; overflow-y: auto; padding: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; }
+  .empty { grid-column: 1 / -1; color: var(--muted); text-align: center; padding: 30px 16px; font-size: 13px; line-height: 1.6; }
+  .piece {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .piece .pv {
+    height: 92px; display: flex; align-items: center; justify-content: center; padding: 6px;
+    background:
+      linear-gradient(45deg,#20242e 25%,transparent 25%,transparent 75%,#20242e 75%),
+      linear-gradient(45deg,#20242e 25%,#171a21 25%,#171a21 75%,#20242e 75%);
+    background-size: 14px 14px; background-position: 0 0, 7px 7px;
+  }
+  .piece .pv img { max-width: 100%; max-height: 100%; }
+  .piece .prow { display: flex; gap: 4px; padding: 6px; }
+  .piece .prow .btn { flex: 1; padding: 5px; font-size: 11px; justify-content: center; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 6px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>One <span>→</span> Many</h1>
+    <a class="nav-link" href="index.html">← Image Timer</a>
+    <div class="mode-toggle" id="modeToggle">
+      <button data-mode="grid" class="active">Grid</button>
+      <button data-mode="rect">Rectangles</button>
+      <button data-mode="lasso">Lasso</button>
+    </div>
+
+    <span class="field-inline" id="gridControls">
+      Rows <input type="number" id="rows" min="1" max="50" value="2" />
+      Cols <input type="number" id="cols" min="1" max="50" value="2" />
+    </span>
+
+    <div class="spacer"></div>
+
+    <input type="file" id="fileInput" accept="image/*" hidden />
+    <button class="btn" id="uploadBtn">＋ Upload image</button>
+    <button class="btn ghost" id="undoBtn" title="Remove last drawn shape">↶ Undo</button>
+    <button class="btn ghost" id="clearShapesBtn">Clear cuts</button>
+    <button class="btn primary" id="cutBtn">✂ Cut</button>
+  </header>
+
+  <main>
+    <div class="editor">
+      <div class="stage">
+        <div class="canvas-holder" id="holder" style="display:none;">
+          <canvas id="base"></canvas>
+          <canvas id="overlay"></canvas>
+        </div>
+        <div class="placeholder" id="placeholder">
+          <b>Upload an image to begin.</b><br />
+          Then pick a mode:<br />
+          <b>Grid</b> — split into rows × cols.<br />
+          <b>Rectangles</b> — drag boxes around each piece.<br />
+          <b>Lasso</b> — trace freehand around each shape (like cutting paper animals).
+        </div>
+      </div>
+      <div class="hint-bar" id="hintBar">Upload an image to start.</div>
+    </div>
+
+    <aside>
+      <div class="res-head">
+        <span class="count">Pieces: <b id="pieceCount">0</b></span>
+      </div>
+      <div class="res-actions">
+        <button class="btn" id="downloadAllBtn">⤓ Download all (.zip)</button>
+        <button class="btn ghost" id="clearResultsBtn">Clear</button>
+      </div>
+      <div class="results" id="results">
+        <div class="empty" id="resEmpty">No pieces yet.<br />Cut the image and they'll appear here.</div>
+      </div>
+    </aside>
+  </main>
+
+<script>
+(() => {
+  "use strict";
+
+  let baseImage = null;      // Image object
+  let mode = "grid";
+  let rects = [];            // {x,y,w,h} in image pixels
+  let lassos = [];           // array of arrays of {x,y}
+  let pieces = [];           // {name, canvas}
+  let pieceId = 1;
+
+  // interaction state
+  let drawing = false;
+  let startPt = null;
+  let curRect = null;
+  let curPath = null;
+
+  const el = {
+    fileInput: document.getElementById("fileInput"),
+    uploadBtn: document.getElementById("uploadBtn"),
+    modeToggle: document.getElementById("modeToggle"),
+    gridControls: document.getElementById("gridControls"),
+    rows: document.getElementById("rows"),
+    cols: document.getElementById("cols"),
+    holder: document.getElementById("holder"),
+    base: document.getElementById("base"),
+    overlay: document.getElementById("overlay"),
+    placeholder: document.getElementById("placeholder"),
+    hintBar: document.getElementById("hintBar"),
+    cutBtn: document.getElementById("cutBtn"),
+    undoBtn: document.getElementById("undoBtn"),
+    clearShapesBtn: document.getElementById("clearShapesBtn"),
+    results: document.getElementById("results"),
+    resEmpty: document.getElementById("resEmpty"),
+    pieceCount: document.getElementById("pieceCount"),
+    downloadAllBtn: document.getElementById("downloadAllBtn"),
+    clearResultsBtn: document.getElementById("clearResultsBtn"),
+  };
+  const octx = el.overlay.getContext("2d");
+
+  const HINTS = {
+    grid: "Grid mode: set Rows × Cols, then press Cut. The image splits into equal cells.",
+    rect: "Rectangles mode: click-drag to draw a box around each piece. Draw as many as you want, then Cut.",
+    lasso: "Lasso mode: press and drag to trace around a shape, release to close it. Trace each animal, then Cut.",
+  };
+
+  // ---------- Upload ----------
+  el.uploadBtn.addEventListener("click", () => el.fileInput.click());
+  el.fileInput.addEventListener("change", e => {
+    const f = e.target.files[0];
+    if (!f || !f.type.startsWith("image/")) return;
+    const url = URL.createObjectURL(f);
+    const img = new Image();
+    img.onload = () => {
+      baseImage = img;
+      el.base.width = img.naturalWidth;
+      el.base.height = img.naturalHeight;
+      el.overlay.width = img.naturalWidth;
+      el.overlay.height = img.naturalHeight;
+      el.base.getContext("2d").drawImage(img, 0, 0);
+      el.holder.style.display = "block";
+      el.placeholder.style.display = "none";
+      rects = []; lassos = [];
+      redrawOverlay();
+      setHint();
+    };
+    img.src = url;
+    el.fileInput.value = "";
+  });
+
+  // ---------- Mode ----------
+  el.modeToggle.addEventListener("click", e => {
+    const btn = e.target.closest("button[data-mode]");
+    if (!btn) return;
+    mode = btn.dataset.mode;
+    [...el.modeToggle.children].forEach(b => b.classList.toggle("active", b === btn));
+    el.gridControls.style.display = mode === "grid" ? "inline-flex" : "none";
+    setHint();
+    redrawOverlay();
+  });
+
+  function setHint() {
+    el.hintBar.innerHTML = baseImage
+      ? HINTS[mode]
+      : "Upload an image to start.";
+  }
+
+  [el.rows, el.cols].forEach(inp => inp.addEventListener("input", redrawOverlay));
+
+  // ---------- Coordinate mapping ----------
+  function toImageCoords(evt) {
+    const r = el.overlay.getBoundingClientRect();
+    const sx = el.overlay.width / r.width;
+    const sy = el.overlay.height / r.height;
+    return {
+      x: Math.max(0, Math.min(el.overlay.width, (evt.clientX - r.left) * sx)),
+      y: Math.max(0, Math.min(el.overlay.height, (evt.clientY - r.top) * sy)),
+    };
+  }
+
+  // ---------- Drawing interaction ----------
+  el.overlay.addEventListener("pointerdown", e => {
+    if (!baseImage || mode === "grid") return;
+    el.overlay.setPointerCapture(e.pointerId);
+    drawing = true;
+    startPt = toImageCoords(e);
+    if (mode === "rect") curRect = { x: startPt.x, y: startPt.y, w: 0, h: 0 };
+    else curPath = [startPt];
+  });
+  el.overlay.addEventListener("pointermove", e => {
+    if (!drawing) return;
+    const p = toImageCoords(e);
+    if (mode === "rect") {
+      curRect = { x: Math.min(startPt.x, p.x), y: Math.min(startPt.y, p.y),
+                  w: Math.abs(p.x - startPt.x), h: Math.abs(p.y - startPt.y) };
+    } else if (mode === "lasso") {
+      const last = curPath[curPath.length - 1];
+      if (Math.hypot(p.x - last.x, p.y - last.y) > 3) curPath.push(p);
+    }
+    redrawOverlay();
+  });
+  el.overlay.addEventListener("pointerup", () => {
+    if (!drawing) return;
+    drawing = false;
+    if (mode === "rect" && curRect && curRect.w > 4 && curRect.h > 4) rects.push(curRect);
+    if (mode === "lasso" && curPath && curPath.length >= 3) lassos.push(curPath);
+    curRect = null; curPath = null;
+    redrawOverlay();
+  });
+
+  // ---------- Overlay rendering ----------
+  function redrawOverlay() {
+    octx.clearRect(0, 0, el.overlay.width, el.overlay.height);
+    const scale = el.overlay.width / (el.overlay.getBoundingClientRect().width || el.overlay.width);
+    const lw = Math.max(1, scale * 1.5);
+
+    if (mode === "grid" && baseImage) {
+      const rows = clampInt(el.rows.value, 1, 50);
+      const cols = clampInt(el.cols.value, 1, 50);
+      octx.strokeStyle = "rgba(91,140,255,0.9)";
+      octx.lineWidth = lw;
+      const cw = el.overlay.width / cols, ch = el.overlay.height / rows;
+      for (let c = 1; c < cols; c++) line(c * cw, 0, c * cw, el.overlay.height);
+      for (let r = 1; r < rows; r++) line(0, r * ch, el.overlay.width, r * ch);
+      octx.strokeRect(lw / 2, lw / 2, el.overlay.width - lw, el.overlay.height - lw);
+    }
+
+    // rectangles
+    octx.strokeStyle = "rgba(46,195,166,0.95)";
+    octx.fillStyle = "rgba(46,195,166,0.12)";
+    octx.lineWidth = lw;
+    rects.forEach(rt => { octx.fillRect(rt.x, rt.y, rt.w, rt.h); octx.strokeRect(rt.x, rt.y, rt.w, rt.h); });
+    if (curRect) { octx.fillRect(curRect.x, curRect.y, curRect.w, curRect.h); octx.strokeRect(curRect.x, curRect.y, curRect.w, curRect.h); }
+
+    // lassos
+    const drawPath = (pts, close) => {
+      octx.beginPath();
+      pts.forEach((p, i) => i ? octx.lineTo(p.x, p.y) : octx.moveTo(p.x, p.y));
+      if (close) octx.closePath();
+      octx.fill(); octx.stroke();
+    };
+    octx.strokeStyle = "rgba(255,93,108,0.95)";
+    octx.fillStyle = "rgba(255,93,108,0.14)";
+    octx.lineWidth = lw;
+    lassos.forEach(p => drawPath(p, true));
+    if (curPath) drawPath(curPath, false);
+  }
+  function line(x1, y1, x2, y2) { octx.beginPath(); octx.moveTo(x1, y1); octx.lineTo(x2, y2); octx.stroke(); }
+  window.addEventListener("resize", redrawOverlay);
+
+  // ---------- Cutting ----------
+  el.cutBtn.addEventListener("click", () => {
+    if (!baseImage) { alert("Upload an image first."); return; }
+    if (mode === "grid") cutGrid();
+    else if (mode === "rect") cutRects();
+    else cutLassos();
+  });
+
+  function addPiece(canvas) {
+    pieces.push({ name: `piece-${String(pieceId).padStart(3, "0")}.png`, canvas });
+    pieceId++;
+  }
+
+  function cutGrid() {
+    const rows = clampInt(el.rows.value, 1, 50);
+    const cols = clampInt(el.cols.value, 1, 50);
+    const W = baseImage.naturalWidth, H = baseImage.naturalHeight;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = Math.round(c * W / cols), y = Math.round(r * H / rows);
+        const w = Math.round((c + 1) * W / cols) - x, h = Math.round((r + 1) * H / rows) - y;
+        const cv = document.createElement("canvas");
+        cv.width = w; cv.height = h;
+        cv.getContext("2d").drawImage(baseImage, x, y, w, h, 0, 0, w, h);
+        addPiece(cv);
+      }
+    }
+    renderResults();
+  }
+
+  function cutRects() {
+    if (!rects.length) { alert("Draw at least one rectangle first."); return; }
+    rects.forEach(rt => {
+      const x = Math.round(rt.x), y = Math.round(rt.y), w = Math.round(rt.w), h = Math.round(rt.h);
+      if (w < 1 || h < 1) return;
+      const cv = document.createElement("canvas");
+      cv.width = w; cv.height = h;
+      cv.getContext("2d").drawImage(baseImage, x, y, w, h, 0, 0, w, h);
+      addPiece(cv);
+    });
+    renderResults();
+  }
+
+  function cutLassos() {
+    if (!lassos.length) { alert("Trace at least one lasso first."); return; }
+    lassos.forEach(poly => {
+      const xs = poly.map(p => p.x), ys = poly.map(p => p.y);
+      const minX = Math.floor(Math.min(...xs)), minY = Math.floor(Math.min(...ys));
+      const maxX = Math.ceil(Math.max(...xs)), maxY = Math.ceil(Math.max(...ys));
+      const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
+      const cv = document.createElement("canvas");
+      cv.width = w; cv.height = h;
+      const ctx = cv.getContext("2d");
+      ctx.beginPath();
+      poly.forEach((p, i) => i ? ctx.lineTo(p.x - minX, p.y - minY) : ctx.moveTo(p.x - minX, p.y - minY));
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(baseImage, -minX, -minY);
+      addPiece(cv);
+    });
+    renderResults();
+  }
+
+  // ---------- Undo / clear ----------
+  el.undoBtn.addEventListener("click", () => {
+    if (mode === "rect") rects.pop();
+    else if (mode === "lasso") lassos.pop();
+    redrawOverlay();
+  });
+  el.clearShapesBtn.addEventListener("click", () => { rects = []; lassos = []; redrawOverlay(); });
+
+  // ---------- Results ----------
+  function renderResults() {
+    el.pieceCount.textContent = pieces.length;
+    el.resEmpty.style.display = pieces.length ? "none" : "block";
+    [...el.results.querySelectorAll(".piece")].forEach(n => n.remove());
+    pieces.forEach((pc, i) => {
+      const div = document.createElement("div");
+      div.className = "piece";
+      const url = pc.canvas.toDataURL("image/png");
+      div.innerHTML = `
+        <div class="pv"><img src="${url}" /></div>
+        <div class="prow">
+          <button class="btn dl">⤓ Save</button>
+          <button class="btn ghost rm">✕</button>
+        </div>`;
+      div.querySelector(".dl").addEventListener("click", () => downloadCanvas(pc));
+      div.querySelector(".rm").addEventListener("click", () => { pieces.splice(i, 1); renderResults(); });
+      el.results.appendChild(div);
+    });
+  }
+
+  function downloadCanvas(pc) {
+    pc.canvas.toBlob(blob => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = pc.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    }, "image/png");
+  }
+
+  el.clearResultsBtn.addEventListener("click", () => {
+    if (pieces.length && !confirm("Clear all pieces?")) return;
+    pieces = []; pieceId = 1; renderResults();
+  });
+
+  // ---------- Download all as ZIP (store, no external libs) ----------
+  el.downloadAllBtn.addEventListener("click", async () => {
+    if (!pieces.length) { alert("Nothing to download yet."); return; }
+    el.downloadAllBtn.disabled = true;
+    el.downloadAllBtn.textContent = "Zipping…";
+    const files = [];
+    for (const pc of pieces) {
+      const buf = await new Promise(res => pc.canvas.toBlob(b => b.arrayBuffer().then(res), "image/png"));
+      files.push({ name: pc.name, data: new Uint8Array(buf) });
+    }
+    const zip = buildZip(files);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
+    a.download = "one-to-many-pieces.zip";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    el.downloadAllBtn.disabled = false;
+    el.downloadAllBtn.textContent = "⤓ Download all (.zip)";
+  });
+
+  // Minimal STORE (uncompressed) ZIP writer
+  const crcTable = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(bytes) {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+  function buildZip(files) {
+    const enc = new TextEncoder();
+    const chunks = [];
+    const central = [];
+    let offset = 0;
+    const u16 = v => [v & 0xFF, (v >>> 8) & 0xFF];
+    const u32 = v => [v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF];
+
+    files.forEach(f => {
+      const nameBytes = enc.encode(f.name);
+      const crc = crc32(f.data);
+      const size = f.data.length;
+      const local = [
+        ...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+        ...u32(crc), ...u32(size), ...u32(size),
+        ...u16(nameBytes.length), ...u16(0),
+      ];
+      chunks.push(new Uint8Array(local), nameBytes, f.data);
+      const localLen = local.length + nameBytes.length + size;
+      central.push({ nameBytes, crc, size, offset });
+      offset += localLen;
+    });
+
+    const centralChunks = [];
+    let centralSize = 0;
+    central.forEach(c => {
+      const rec = [
+        ...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+        ...u32(c.crc), ...u32(c.size), ...u32(c.size),
+        ...u16(c.nameBytes.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+        ...u32(0), ...u32(c.offset),
+      ];
+      centralChunks.push(new Uint8Array(rec), c.nameBytes);
+      centralSize += rec.length + c.nameBytes.length;
+    });
+
+    const end = [
+      ...u32(0x06054b50), ...u16(0), ...u16(0),
+      ...u16(files.length), ...u16(files.length),
+      ...u32(centralSize), ...u32(offset), ...u16(0),
+    ];
+
+    const all = [...chunks, ...centralChunks, new Uint8Array(end)];
+    const total = all.reduce((s, a) => s + a.length, 0);
+    const out = new Uint8Array(total);
+    let p = 0;
+    all.forEach(a => { out.set(a, p); p += a.length; });
+    return out;
+  }
+
+  // ---------- utils ----------
+  function clampInt(v, lo, hi) { let n = parseInt(v, 10); if (isNaN(n)) n = lo; return Math.max(lo, Math.min(hi, n)); }
+
+  renderResults();
+  setHint();
+})();
+</script>
+</body>
+</html>

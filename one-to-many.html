@@ -134,7 +134,12 @@
       <button class="btn ghost" id="addV" title="Add a vertical line">＋ V</button>
       <button class="btn ghost" id="addH" title="Add a horizontal line">＋ H</button>
       <button class="btn ghost" id="clearGrid" title="Remove all grid lines">Clear grid</button>
-      <label style="display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:12px;cursor:pointer;"><input type="checkbox" id="curveChk" /> Curve</label>
+      <span id="lineTools" style="display:none;align-items:center;gap:6px;">
+        <span style="color:var(--accent-2);font-size:12px;font-weight:600;">● line:</span>
+        <button class="btn ghost" id="addDotBtn" title="Add a draggable dot to this line">＋ Dot</button>
+        <label style="display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:12px;cursor:pointer;"><input type="checkbox" id="lineCurveChk" /> Curve</label>
+        <button class="btn ghost" id="delLineBtn" title="Delete this line">Delete</button>
+      </span>
     </span>
 
     <div class="spacer"></div>
@@ -188,8 +193,10 @@
   let mode = "grid";
   let rects = [];            // {id, x, y, w, h, cut}
   let lassos = [];           // {id, pts:[{x,y}], cut}
-  let mesh = null;           // deformable grid: { pts:[[{x,y}...]...] } sized (R+1)x(C+1)
-  let smooth = false;        // curve the grid lines
+  let vlines = [];           // vertical cut lines: {id, curved, pts:[{x,y}...]} ordered by y (ends y=0,H)
+  let hlines = [];           // horizontal cut lines: {id, curved, pts:[{x,y}...]} ordered by x (ends x=0,W)
+  let lineId = 1;
+  let selLine = null;        // {axis:'v'|'h', idx} currently-selected line
   let pieces = [];           // {name, canvas}
   let pieceId = 1;
   let shapeId = 1;           // unique id per drawn shape
@@ -200,7 +207,8 @@
   let startPt = null;
   let curRect = null;
   let curPath = null;
-  let dragNode = null;       // {r,c} control point being dragged
+  let dragTarget = null;     // {type:'line'|'node', axis, idx, pi?} during grid drag
+  let lastP = null;          // last pointer pos for whole-line dragging
 
   const el = {
     fileInput: document.getElementById("fileInput"),
@@ -213,7 +221,10 @@
     addV: document.getElementById("addV"),
     addH: document.getElementById("addH"),
     clearGrid: document.getElementById("clearGrid"),
-    curveChk: document.getElementById("curveChk"),
+    lineTools: document.getElementById("lineTools"),
+    addDotBtn: document.getElementById("addDotBtn"),
+    lineCurveChk: document.getElementById("lineCurveChk"),
+    delLineBtn: document.getElementById("delLineBtn"),
     holder: document.getElementById("holder"),
     base: document.getElementById("base"),
     overlay: document.getElementById("overlay"),
@@ -232,7 +243,7 @@
   const octx = el.overlay.getContext("2d");
 
   const HINTS = {
-    grid: "Grid mode: 'Even grid' to start, ＋V/＋H add lines, drag any node to bend, tick Curve for smooth cuts, double-click a line to delete. Then Cut all.",
+    grid: "Grid mode: ＋V/＋H add straight movable lines (drag to move). Click a line to select, ＋Dot to add points, drag dots to shape, tick Curve to smooth-bend just that line. Then Cut all.",
     rect: "Rectangles mode: click-drag to draw a box around each piece. Draw as many as you want, then Cut all.",
     lasso: "Lasso mode: press and drag to trace around a shape, release to close it. Trace each animal, then Cut all.",
   };
@@ -257,7 +268,7 @@
       el.base.getContext("2d").drawImage(img, 0, 0);
       el.holder.style.display = "block";
       el.placeholder.style.display = "none";
-      rects = []; lassos = []; mesh = null; cutIds.clear();
+      rects = []; lassos = []; vlines = []; hlines = []; selLine = null; cutIds.clear();
       redrawOverlay();
       setHint();
     };
@@ -289,80 +300,71 @@
       : "Upload an image to start.";
   }
 
+  // ---------- Grid: independent straight / curvable cut lines ----------
   el.genGrid.addEventListener("click", generateEvenGrid);
-  el.addV.addEventListener("click", () => { if (!baseImage) return; if (!mesh) generateEvenGrid(); else insertColumn(); redrawOverlay(); });
-  el.addH.addEventListener("click", () => { if (!baseImage) return; if (!mesh) generateEvenGrid(); else insertRow(); redrawOverlay(); });
-  el.clearGrid.addEventListener("click", () => { mesh = null; redrawOverlay(); });
-  el.curveChk.addEventListener("change", () => { smooth = el.curveChk.checked; redrawOverlay(); });
+  el.addV.addEventListener("click", () => { if (baseImage) addVLine(); });
+  el.addH.addEventListener("click", () => { if (baseImage) addHLine(); });
+  el.clearGrid.addEventListener("click", () => { vlines = []; hlines = []; selLine = null; redrawOverlay(); });
+  el.addDotBtn.addEventListener("click", addDotToSelected);
+  el.delLineBtn.addEventListener("click", deleteSelected);
+  el.lineCurveChk.addEventListener("change", () => { const L = selectedLineObj(); if (L) { L.curved = el.lineCurveChk.checked; redrawOverlay(); } });
 
-  // ----- deformable mesh grid -----
-  function meshRows() { return mesh ? mesh.pts.length - 1 : 0; }
-  function meshCols() { return mesh ? mesh.pts[0].length - 1 : 0; }
+  function W() { return baseImage.naturalWidth; }
+  function H() { return baseImage.naturalHeight; }
+  function ovScale() { return el.overlay.width / (el.overlay.getBoundingClientRect().width || el.overlay.width); }
 
   function generateEvenGrid() {
     if (!baseImage) { alert("Upload an image first."); return; }
-    buildMesh(clampInt(el.rows.value, 1, 100), clampInt(el.cols.value, 1, 100));
+    const rows = clampInt(el.rows.value, 1, 100), cols = clampInt(el.cols.value, 1, 100);
+    vlines = []; hlines = []; selLine = null;
+    for (let c = 1; c < cols; c++) vlines.push(mkVLine(c * W() / cols));
+    for (let r = 1; r < rows; r++) hlines.push(mkHLine(r * H() / rows));
     redrawOverlay();
   }
-  function buildMesh(rows, cols) {
-    const W = baseImage.naturalWidth, H = baseImage.naturalHeight, pts = [];
-    for (let r = 0; r <= rows; r++) {
-      const row = [];
-      for (let c = 0; c <= cols; c++) row.push({ x: c * W / cols, y: r * H / rows });
-      pts.push(row);
-    }
-    mesh = { pts };
-  }
-  function insertColumn() {
-    const C = meshCols(), R = meshRows();
-    let best = -1, at = 0;
-    for (let c = 0; c < C; c++) {
-      let sum = 0;
-      for (let r = 0; r <= R; r++) sum += mesh.pts[r][c + 1].x - mesh.pts[r][c].x;
-      if (sum > best) { best = sum; at = c; }
-    }
-    for (let r = 0; r <= R; r++) {
-      const a = mesh.pts[r][at], b = mesh.pts[r][at + 1];
-      mesh.pts[r].splice(at + 1, 0, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-    }
-  }
-  function insertRow() {
-    const C = meshCols(), R = meshRows();
-    let best = -1, at = 0;
-    for (let r = 0; r < R; r++) {
-      let sum = 0;
-      for (let c = 0; c <= C; c++) sum += mesh.pts[r + 1][c].y - mesh.pts[r][c].y;
-      if (sum > best) { best = sum; at = r; }
-    }
-    const nr = [];
-    for (let c = 0; c <= C; c++) {
-      const a = mesh.pts[at][c], b = mesh.pts[at + 1][c];
-      nr.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-    }
-    mesh.pts.splice(at + 1, 0, nr);
+  function mkVLine(x) { return { id: lineId++, curved: false, pts: [{ x, y: 0 }, { x, y: H() }] }; }
+  function mkHLine(y) { return { id: lineId++, curved: false, pts: [{ x: 0, y }, { x: W(), y }] }; }
+  function addVLine() { vlines.push(mkVLine(widestGap(vlines.map(avgX), W()))); redrawOverlay(); }
+  function addHLine() { hlines.push(mkHLine(widestGap(hlines.map(avgY), H()))); redrawOverlay(); }
+  function avgX(l) { return l.pts.reduce((s, p) => s + p.x, 0) / l.pts.length; }
+  function avgY(l) { return l.pts.reduce((s, p) => s + p.y, 0) / l.pts.length; }
+  function widestGap(positions, max) {
+    const b = [0, ...positions.slice().sort((a, b) => a - b), max];
+    let best = -1, mid = max / 2;
+    for (let i = 0; i < b.length - 1; i++) { const g = b[i + 1] - b[i]; if (g > best) { best = g; mid = (b[i] + b[i + 1]) / 2; } }
+    return mid;
   }
 
-  function hitTestNode(p) {
-    if (!mesh) return null;
-    const scale = el.overlay.width / (el.overlay.getBoundingClientRect().width || el.overlay.width);
-    let bd = scale * 11, best = null, R = meshRows(), C = meshCols();
-    for (let r = 0; r <= R; r++) for (let c = 0; c <= C; c++) {
-      const q = mesh.pts[r][c], d = Math.hypot(p.x - q.x, p.y - q.y);
-      if (d < bd) { bd = d; best = { r, c }; }
-    }
-    return best;
+  function selectedLineObj() { if (!selLine) return null; return (selLine.axis === "v" ? vlines : hlines)[selLine.idx] || null; }
+  function updateLineTools() {
+    const L = mode === "grid" ? selectedLineObj() : null;
+    el.lineTools.style.display = L ? "inline-flex" : "none";
+    if (L) el.lineCurveChk.checked = !!L.curved;
   }
-  function moveNode(node, p) {
-    const R = meshRows(), C = meshCols(), W = el.overlay.width, H = el.overlay.height, r = node.r, c = node.c;
-    const isTop = r === 0, isBot = r === R, isLeft = c === 0, isRight = c === C;
-    if ((isTop || isBot) && (isLeft || isRight)) return; // corners fixed
-    let x = Math.max(0, Math.min(W, p.x)), y = Math.max(0, Math.min(H, p.y));
-    if (isTop) y = 0; else if (isBot) y = H;
-    if (isLeft) x = 0; else if (isRight) x = W;
-    mesh.pts[r][c] = { x, y };
+  function addDotToSelected() {
+    const L = selectedLineObj(); if (!L) { alert("Click a line to select it first."); return; }
+    let bi = 0, bl = -1;
+    for (let i = 0; i < L.pts.length - 1; i++) { const d = Math.hypot(L.pts[i + 1].x - L.pts[i].x, L.pts[i + 1].y - L.pts[i].y); if (d > bl) { bl = d; bi = i; } }
+    const a = L.pts[bi], b = L.pts[bi + 1];
+    L.pts.splice(bi + 1, 0, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    redrawOverlay();
+  }
+  function deleteSelected() {
+    if (!selLine) return;
+    (selLine.axis === "v" ? vlines : hlines).splice(selLine.idx, 1);
+    selLine = null; redrawOverlay();
+  }
+  function insertDotAt(L, axis, p) {
+    let at = L.pts.length - 1;
+    if (axis === "v") {
+      for (let i = 0; i < L.pts.length - 1; i++) if (p.y >= L.pts[i].y && p.y <= L.pts[i + 1].y) { at = i + 1; break; }
+      L.pts.splice(at, 0, { x: Math.max(0, Math.min(W(), p.x)), y: Math.max(1, Math.min(H() - 1, p.y)) });
+    } else {
+      for (let i = 0; i < L.pts.length - 1; i++) if (p.x >= L.pts[i].x && p.x <= L.pts[i + 1].x) { at = i + 1; break; }
+      L.pts.splice(at, 0, { x: Math.max(1, Math.min(W() - 1, p.x)), y: Math.max(0, Math.min(H(), p.y)) });
+    }
   }
 
-  // Catmull-Rom smoothing for curved cuts
+  // sampling + smoothing
   function catmull(p0, p1, p2, p3, t) {
     const t2 = t * t, t3 = t2 * t;
     return {
@@ -370,65 +372,99 @@
       y: 0.5 * (2 * p1.y + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
     };
   }
-  function edgeV(c, r, K) {
-    const p1 = mesh.pts[r][c], p2 = mesh.pts[r + 1][c];
-    if (!smooth) return [p1, p2];
-    const p0 = (mesh.pts[r - 1] && mesh.pts[r - 1][c]) || p1;
-    const p3 = (mesh.pts[r + 2] && mesh.pts[r + 2][c]) || p2;
+  function lineSample(line, K) {
+    const p = line.pts;
+    if (!line.curved || p.length < 3) return p.slice();
     const out = [];
-    for (let i = 0; i <= K; i++) out.push(catmull(p0, p1, p2, p3, i / K));
+    for (let i = 0; i < p.length - 1; i++) {
+      const p1 = p[i], p2 = p[i + 1], p0 = p[i - 1] || p1, p3 = p[i + 2] || p2;
+      for (let s = 0; s <= K; s++) { if (i > 0 && s === 0) continue; out.push(catmull(p0, p1, p2, p3, s / K)); }
+    }
     return out;
   }
-  function edgeH(r, c, K) {
-    const row = mesh.pts[r], p1 = row[c], p2 = row[c + 1];
-    if (!smooth) return [p1, p2];
-    const p0 = row[c - 1] || p1, p3 = row[c + 2] || p2;
-    const out = [];
-    for (let i = 0; i <= K; i++) out.push(catmull(p0, p1, p2, p3, i / K));
-    return out;
-  }
-  function sampleV(c, K) {
-    const R = meshRows(); let pts = [];
-    for (let r = 0; r < R; r++) { const seg = edgeV(c, r, K); pts = pts.concat(r ? seg.slice(1) : seg); }
-    return pts;
-  }
-  function sampleH(r, K) {
-    const C = meshCols(); let pts = [];
-    for (let c = 0; c < C; c++) { const seg = edgeH(r, c, K); pts = pts.concat(c ? seg.slice(1) : seg); }
-    return pts;
-  }
-  function strokePoly(pts) {
-    octx.beginPath();
-    pts.forEach((p, i) => i ? octx.lineTo(p.x, p.y) : octx.moveTo(p.x, p.y));
-    octx.stroke();
-  }
-  function cellPolygon(r, c, K) {
-    const top = edgeH(r, c, K);
-    const right = edgeV(c + 1, r, K);
-    const bottom = edgeH(r + 1, c, K).slice().reverse();
-    const left = edgeV(c, r, K).slice().reverse();
-    let poly = top.slice();
-    poly = poly.concat(right.slice(1));
-    poly = poly.concat(bottom.slice(1));
-    poly = poly.concat(left.slice(1, -1));
-    return poly;
-  }
+  function strokePoly(pts) { octx.beginPath(); pts.forEach((p, i) => i ? octx.lineTo(p.x, p.y) : octx.moveTo(p.x, p.y)); octx.stroke(); }
+
+  // hit testing / dragging
   function distToSeg(p, a, b) {
     const vx = b.x - a.x, vy = b.y - a.y, wx = p.x - a.x, wy = p.y - a.y;
-    const len2 = vx * vx + vy * vy;
-    let t = len2 ? (wx * vx + wy * vy) / len2 : 0;
+    const len2 = vx * vx + vy * vy; let t = len2 ? (wx * vx + wy * vy) / len2 : 0;
     t = Math.max(0, Math.min(1, t));
-    const dx = a.x + t * vx - p.x, dy = a.y + t * vy - p.y;
-    return Math.hypot(dx, dy);
+    return Math.hypot(a.x + t * vx - p.x, a.y + t * vy - p.y);
   }
-  function distToPolyline(p, poly) {
-    let best = Infinity;
+  function distToLine(p, line, K) {
+    const poly = lineSample(line, K); let best = Infinity;
     for (let i = 0; i < poly.length - 1; i++) best = Math.min(best, distToSeg(p, poly[i], poly[i + 1]));
     return best;
   }
-  function removeLine(l) {
-    if (l.axis === "v") { if (meshCols() <= 1) return; mesh.pts.forEach(row => row.splice(l.index, 1)); }
-    else { if (meshRows() <= 1) return; mesh.pts.splice(l.index, 1); }
+  function hitNode(p, th) {
+    const L = selectedLineObj(); if (!L) return null;
+    for (let i = 0; i < L.pts.length; i++) if (Math.hypot(p.x - L.pts[i].x, p.y - L.pts[i].y) < th) return i;
+    return null;
+  }
+  function hitLine(p, th, K) {
+    let best = null, bd = th;
+    for (let i = 0; i < vlines.length; i++) { const d = distToLine(p, vlines[i], K); if (d < bd) { bd = d; best = { axis: "v", idx: i }; } }
+    for (let i = 0; i < hlines.length; i++) { const d = distToLine(p, hlines[i], K); if (d < bd) { bd = d; best = { axis: "h", idx: i }; } }
+    return best;
+  }
+  function moveDot(t, p) {
+    const L = (t.axis === "v" ? vlines : hlines)[t.idx], pts = L.pts, i = t.pi, n = pts.length - 1;
+    let x = Math.max(0, Math.min(W(), p.x)), y = Math.max(0, Math.min(H(), p.y));
+    if (t.axis === "v") {
+      if (i === 0) y = 0; else if (i === n) y = H();
+      else y = Math.max(pts[i - 1].y + 1, Math.min(pts[i + 1].y - 1, y));
+    } else {
+      if (i === 0) x = 0; else if (i === n) x = W();
+      else x = Math.max(pts[i - 1].x + 1, Math.min(pts[i + 1].x - 1, x));
+    }
+    pts[i] = { x, y };
+  }
+  function moveWholeLine(t, p) {
+    const L = (t.axis === "v" ? vlines : hlines)[t.idx];
+    if (t.axis === "v") { const dx = p.x - lastP.x; L.pts.forEach(pt => { pt.x = Math.max(0, Math.min(W(), pt.x + dx)); }); }
+    else { const dy = p.y - lastP.y; L.pts.forEach(pt => { pt.y = Math.max(0, Math.min(H(), pt.y + dy)); }); }
+  }
+
+  // cell construction for cutting
+  function edgePoly(which) {
+    const w = W(), h = H();
+    if (which === "left") return [{ x: 0, y: 0 }, { x: 0, y: h }];
+    if (which === "right") return [{ x: w, y: 0 }, { x: w, y: h }];
+    if (which === "top") return [{ x: 0, y: 0 }, { x: w, y: 0 }];
+    return [{ x: 0, y: h }, { x: w, y: h }];
+  }
+  function segInt(p1, p2, p3, p4) {
+    const d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
+    if (Math.abs(d) < 1e-9) return null;
+    const t = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d;
+    const u = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d;
+    if (t < -0.0001 || t > 1.0001 || u < -0.0001 || u > 1.0001) return null;
+    return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
+  }
+  function polyInt(A, B) {
+    for (let i = 0; i < A.length - 1; i++) for (let j = 0; j < B.length - 1; j++) { const pt = segInt(A[i], A[i + 1], B[j], B[j + 1]); if (pt) return pt; }
+    return null;
+  }
+  function interiorX(poly, xa, xb) {
+    const lo = Math.min(xa, xb), hi = Math.max(xa, xb);
+    return poly.filter(p => p.x > lo + 0.5 && p.x < hi - 0.5).sort((a, b) => a.x - b.x);
+  }
+  function interiorY(poly, ya, yb) {
+    const lo = Math.min(ya, yb), hi = Math.max(ya, yb);
+    return poly.filter(p => p.y > lo + 0.5 && p.y < hi - 0.5).sort((a, b) => a.y - b.y);
+  }
+  function cellPoly(left, right, top, bottom) {
+    const TL = polyInt(left, top), TR = polyInt(right, top), BR = polyInt(right, bottom), BL = polyInt(left, bottom);
+    if (!TL || !TR || !BR || !BL) return [];
+    const poly = [TL];
+    poly.push(...interiorX(top, TL.x, TR.x));
+    poly.push(TR);
+    poly.push(...interiorY(right, TR.y, BR.y));
+    poly.push(BR);
+    poly.push(...interiorX(bottom, BL.x, BR.x).reverse());
+    poly.push(BL);
+    poly.push(...interiorY(left, TL.y, BL.y).reverse());
+    return poly;
   }
 
   // ---------- Coordinate mapping ----------
@@ -446,8 +482,13 @@
   el.overlay.addEventListener("pointerdown", e => {
     if (!baseImage) return;
     if (mode === "grid") {
-      const node = hitTestNode(toImageCoords(e));
-      if (node) { dragNode = node; el.overlay.setPointerCapture(e.pointerId); }
+      const p = toImageCoords(e), sc = ovScale();
+      lastP = p;
+      const ni = hitNode(p, sc * 11);
+      if (ni !== null) { dragTarget = { type: "node", axis: selLine.axis, idx: selLine.idx, pi: ni }; el.overlay.setPointerCapture(e.pointerId); return; }
+      const hl = hitLine(p, sc * 8, 14);
+      if (hl) { selLine = hl; dragTarget = { type: "line", axis: hl.axis, idx: hl.idx }; el.overlay.setPointerCapture(e.pointerId); redrawOverlay(); return; }
+      selLine = null; dragTarget = null; redrawOverlay();
       return;
     }
     el.overlay.setPointerCapture(e.pointerId);
@@ -458,8 +499,14 @@
   });
   el.overlay.addEventListener("pointermove", e => {
     if (mode === "grid") {
-      if (dragNode) { moveNode(dragNode, toImageCoords(e)); redrawOverlay(); }
-      else { el.overlay.style.cursor = hitTestNode(toImageCoords(e)) ? "move" : "default"; }
+      const p = toImageCoords(e);
+      if (dragTarget) {
+        if (dragTarget.type === "node") moveDot(dragTarget, p); else moveWholeLine(dragTarget, p);
+        lastP = p; redrawOverlay();
+      } else {
+        const sc = ovScale();
+        el.overlay.style.cursor = (hitNode(p, sc * 11) !== null || hitLine(p, sc * 8, 14)) ? "move" : "default";
+      }
       return;
     }
     if (!drawing) return;
@@ -474,7 +521,7 @@
     redrawOverlay();
   });
   el.overlay.addEventListener("pointerup", () => {
-    if (dragNode) { dragNode = null; return; }
+    if (dragTarget) { dragTarget = null; return; }
     if (!drawing) return;
     drawing = false;
     if (mode === "rect" && curRect && curRect.w > 4 && curRect.h > 4)
@@ -485,14 +532,13 @@
     redrawOverlay();
   });
   el.overlay.addEventListener("dblclick", e => {
-    if (mode !== "grid" || !mesh) return;
-    const p = toImageCoords(e);
-    const scale = el.overlay.width / (el.overlay.getBoundingClientRect().width || el.overlay.width);
-    const th = scale * 8, K = smooth ? 16 : 1, R = meshRows(), C = meshCols();
-    let best = null, bd = th;
-    for (let c = 1; c < C; c++) { const d = distToPolyline(p, sampleV(c, K)); if (d < bd) { bd = d; best = { axis: "v", index: c }; } }
-    for (let r = 1; r < R; r++) { const d = distToPolyline(p, sampleH(r, K)); if (d < bd) { bd = d; best = { axis: "h", index: r }; } }
-    if (best) { removeLine(best); redrawOverlay(); }
+    if (mode !== "grid" || !baseImage) return;
+    const p = toImageCoords(e), sc = ovScale();
+    const hl = hitLine(p, sc * 8, 14);
+    if (!hl) return;
+    selLine = hl;
+    insertDotAt((hl.axis === "v" ? vlines : hlines)[hl.idx], hl.axis, p);
+    redrawOverlay();
   });
 
   // ---------- Overlay rendering ----------
@@ -502,19 +548,24 @@
     const scale = el.overlay.width / (el.overlay.getBoundingClientRect().width || el.overlay.width);
     const lw = Math.max(1, scale * 1.5);
 
-    if (mode === "grid" && mesh) {
-      const K = smooth ? 16 : 1, R = meshRows(), C = meshCols();
-      octx.strokeStyle = "rgba(91,140,255,0.95)";
-      octx.lineWidth = lw;
-      for (let c = 0; c <= C; c++) strokePoly(sampleV(c, K));
-      for (let r = 0; r <= R; r++) strokePoly(sampleH(r, K));
-      const hs = Math.max(4, scale * 5);
-      for (let r = 0; r <= R; r++) for (let c = 0; c <= C; c++) {
-        const q = mesh.pts[r][c];
-        const corner = (r === 0 || r === R) && (c === 0 || c === C);
-        octx.fillStyle = corner ? "rgba(139,147,167,0.9)" : "rgba(91,140,255,0.95)";
-        octx.fillRect(q.x - hs, q.y - hs, hs * 2, hs * 2);
-      }
+    if (mode === "grid") {
+      updateLineTools();
+      const K = 14, hs = Math.max(4, scale * 5);
+      const drawLine = (line, sel) => {
+        octx.strokeStyle = sel ? "rgba(46,195,166,0.98)" : "rgba(91,140,255,0.9)";
+        octx.lineWidth = sel ? lw * 1.7 : lw;
+        strokePoly(lineSample(line, K));
+      };
+      vlines.forEach((l, i) => drawLine(l, selLine && selLine.axis === "v" && selLine.idx === i));
+      hlines.forEach((l, i) => drawLine(l, selLine && selLine.axis === "h" && selLine.idx === i));
+      octx.strokeStyle = "rgba(91,140,255,0.45)"; octx.lineWidth = lw;
+      octx.strokeRect(lw / 2, lw / 2, el.overlay.width - lw, el.overlay.height - lw);
+      const L = selectedLineObj();
+      if (L) L.pts.forEach((pt, i) => {
+        const end = i === 0 || i === L.pts.length - 1;
+        octx.fillStyle = end ? "rgba(139,147,167,0.95)" : "rgba(46,195,166,0.98)";
+        octx.fillRect(pt.x - hs, pt.y - hs, hs * 2, hs * 2);
+      });
     }
 
     // rectangles (cut ones dimmed)
@@ -572,25 +623,26 @@
   }
 
   function cutGridCells() {
-    if (!mesh) return 0;
-    const R = meshRows(), C = meshCols(), K = smooth ? 16 : 1;
+    if (vlines.length === 0 && hlines.length === 0) return 0;
+    const K = 16;
+    const Vb = [edgePoly("left"), ...vlines.slice().sort((a, b) => avgX(a) - avgX(b)).map(l => lineSample(l, K)), edgePoly("right")];
+    const Hb = [edgePoly("top"), ...hlines.slice().sort((a, b) => avgY(a) - avgY(b)).map(l => lineSample(l, K)), edgePoly("bottom")];
     let count = 0;
-    for (let r = 0; r < R; r++) {
-      for (let c = 0; c < C; c++) {
-        const poly = cellPolygon(r, c, K);
+    for (let r = 0; r < Hb.length - 1; r++) {
+      for (let c = 0; c < Vb.length - 1; c++) {
+        const poly = cellPoly(Vb[c], Vb[c + 1], Hb[r], Hb[r + 1]);
+        if (poly.length < 3) continue;
         const xs = poly.map(p => p.x), ys = poly.map(p => p.y);
         const minX = Math.floor(Math.min(...xs)), minY = Math.floor(Math.min(...ys));
         const maxX = Math.ceil(Math.max(...xs)), maxY = Math.ceil(Math.max(...ys));
         const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
-        const id = `mesh:${r}:${c}:${minX}:${minY}:${maxX}:${maxY}`;
-        if (cutIds.has(id)) continue;      // already cut this exact cell
-        const cv = document.createElement("canvas");
-        cv.width = w; cv.height = h;
+        const id = `cell:${r}:${c}:${minX}:${minY}:${maxX}:${maxY}`;
+        if (cutIds.has(id)) continue;
+        const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
         const ctx = cv.getContext("2d");
         ctx.beginPath();
         poly.forEach((p, i) => i ? ctx.lineTo(p.x - minX, p.y - minY) : ctx.moveTo(p.x - minX, p.y - minY));
-        ctx.closePath();
-        ctx.clip();
+        ctx.closePath(); ctx.clip();
         ctx.drawImage(baseImage, -minX, -minY);
         addPiece(cv); cutIds.add(id); count++;
       }
@@ -638,11 +690,11 @@
   el.undoBtn.addEventListener("click", () => {
     if (mode === "rect") rects.pop();
     else if (mode === "lasso") lassos.pop();
-    else if (mode === "grid" && mesh) { if (meshCols() > 1) mesh.pts.forEach(row => row.splice(meshCols() - 1, 1)); else if (meshRows() > 1) mesh.pts.splice(meshRows() - 1, 1); }
+    else if (mode === "grid") { if (selLine) { deleteSelected(); return; } if (hlines.length >= vlines.length) hlines.pop(); else vlines.pop(); }
     redrawOverlay();
   });
   el.clearShapesBtn.addEventListener("click", () => {
-    rects = []; lassos = []; mesh = null; cutIds.clear();
+    rects = []; lassos = []; vlines = []; hlines = []; selLine = null; cutIds.clear();
     redrawOverlay();
   });
 

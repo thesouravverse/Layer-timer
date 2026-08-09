@@ -75,8 +75,17 @@
   </main>
 
   <script src="tray.js"></script>
-  <script type="module">
-    import { removeBackground } from "https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/+esm";
+  <script>
+    // Load the background-removal model lazily so the Tray wiring below is
+    // never blocked by the CDN (important on restricted networks).
+    let removeBackground = null;
+    async function ensureRemover() {
+      if (!removeBackground) {
+        const m = await import("https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/+esm");
+        removeBackground = m.removeBackground;
+      }
+      return removeBackground;
+    }
 
     const el = {
       fileInput: document.getElementById("fileInput"),
@@ -129,7 +138,8 @@
       el.removeBtn.disabled = true; el.uploadBtn.disabled = true;
       setStatus("Loading model & processing… first run downloads it once.", "working");
       try {
-        const blob = await removeBackground(sourceBlob, {
+        const rb = await ensureRemover();
+        const blob = await rb(sourceBlob, {
           progress: (key, cur, tot) => {
             const pct = tot ? Math.round((cur / tot) * 100) : 0;
             const label = key.startsWith("fetch") ? "Downloading model" : "Processing";

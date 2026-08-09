@@ -40,6 +40,11 @@
   header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
   header h1 span { color: var(--accent); }
 
+  .topnav{display:flex;align-items:center;gap:6px}
+  .topnav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;padding:6px 10px;border-radius:8px;border:1px solid transparent}
+  .topnav a:hover{color:var(--text);border-color:var(--line)}
+  .topnav a.active{color:#fff;background:var(--panel-2);border-color:var(--line)}
+
   .mode-toggle { display: flex; background: var(--panel-2); border-radius: 999px; padding: 3px; }
   .mode-toggle button {
     border: 0; background: transparent; color: var(--muted);
@@ -152,6 +157,12 @@
 <body class="mode-overlay">
   <header>
     <h1>Image<span>Timer</span></h1>
+    <nav class="topnav">
+      <a href="index.html" class="active">Layer Timer</a>
+      <a href="one-to-many.html">One → Many</a>
+      <a href="bg-remover.html">Bg Remover</a>
+      <button id="trayBtn" class="btn" style="padding:6px 10px;">🗂 Tray <b id="trayCount">0</b></button>
+    </nav>
     <div class="mode-toggle" id="modeToggle">
       <button data-mode="overlay" class="active">Overlay</button>
       <button data-mode="seq">Sequence</button>
@@ -209,6 +220,7 @@
     </div>
   </main>
 
+<script src="tray.js"></script>
 <script>
 (() => {
   "use strict";
@@ -633,6 +645,24 @@
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
+
+  // Receive an image from the Tray (from One→Many or Bg Remover)
+  window.TRAY_USE_LABEL = "Add as layer";
+  window.TRAY_IMPORT = (blob, name) => {
+    const url = URL.createObjectURL(blob);
+    layers.push({
+      id: uid++,
+      name: (name || "layer").replace(/\.[^.]+$/, ""),
+      url, img: null,
+      start: +(layers.length * 0.2).toFixed(2),
+      dur: 0.2,
+      visible: true,
+    });
+    buildLayerImages();
+    renderLayers();
+    renderStage();
+    if (window.TrayUI) window.TrayUI.close();
+  };
 
   // init
   renderStage();

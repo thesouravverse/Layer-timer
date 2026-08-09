@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bg Remover — Image Pipeline</title>
+<style>
+  :root{
+    --bg:#0f1115;--panel:#171a21;--panel-2:#1f2430;--line:#2a3040;
+    --text:#e6e9ef;--muted:#8b93a7;--accent:#5b8cff;--accent-2:#2ec3a6;--danger:#ff5d6c;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{font-family:system-ui,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);
+    display:flex;flex-direction:column;overflow:hidden}
+  header{display:flex;align-items:center;gap:14px;padding:10px 16px;background:var(--panel);
+    border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:16px;margin:0}header h1 span{color:var(--accent)}
+  .topnav{display:flex;align-items:center;gap:6px}
+  .topnav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;padding:6px 10px;border-radius:8px;border:1px solid transparent}
+  .topnav a:hover{color:var(--text);border-color:var(--line)}
+  .topnav a.active{color:#fff;background:var(--panel-2);border-color:var(--line)}
+  .spacer{flex:1}
+  button.btn{border:1px solid var(--line);background:var(--panel-2);color:var(--text);padding:8px 12px;
+    border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+  button.btn:hover{border-color:var(--accent)}
+  button.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.btn.ghost{background:transparent}
+  button.btn:disabled{opacity:.4;cursor:default}
+  main{flex:1;display:flex;flex-direction:column;min-height:0}
+  .stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;overflow:auto;padding:20px;
+    background:radial-gradient(circle at center,#14171e 0%,#0b0d11 100%)}
+  .holder{max-width:92%;max-height:calc(100vh - 170px);
+    background:linear-gradient(45deg,#20242e 25%,transparent 25%,transparent 75%,#20242e 75%),linear-gradient(45deg,#20242e 25%,#171a21 25%,#171a21 75%,#20242e 75%);
+    background-size:22px 22px;background-position:0 0,11px 11px;border:1px solid var(--line);border-radius:10px;padding:6px;line-height:0}
+  .holder img{max-width:100%;max-height:calc(100vh - 190px);display:block}
+  .placeholder{color:var(--muted);font-size:14px;text-align:center;line-height:1.8}
+  .placeholder b{color:var(--text)}
+  .statusbar{padding:9px 16px;font-size:12px;color:var(--muted);background:var(--panel);border-top:1px solid var(--line);
+    display:flex;align-items:center;gap:10px}
+  .statusbar .dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+  .statusbar.working .dot{background:var(--accent);animation:pulse 1s infinite}
+  .statusbar.done .dot{background:var(--accent-2)}
+  .statusbar.err .dot{background:var(--danger)}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+</style>
+</head>
+<body>
+  <header>
+    <h1>Bg <span>Remover</span></h1>
+    <nav class="topnav">
+      <a href="index.html">Layer Timer</a>
+      <a href="one-to-many.html">One → Many</a>
+      <a href="bg-remover.html" class="active">Bg Remover</a>
+      <button id="trayBtn" class="btn">🗂 Tray <b id="trayCount">0</b></button>
+    </nav>
+    <div class="spacer"></div>
+    <input type="file" id="fileInput" accept="image/*" hidden />
+    <button class="btn" id="uploadBtn">＋ Upload image</button>
+    <button class="btn primary" id="removeBtn" disabled>✨ Remove background</button>
+    <button class="btn" id="downloadBtn" disabled>⤓ Download PNG</button>
+    <button class="btn" id="sendTrayBtn" disabled>🗂 Send to Tray</button>
+  </header>
+
+  <main>
+    <div class="stage">
+      <div class="holder" id="holder" style="display:none;"><img id="stageImg" alt="" /></div>
+      <div class="placeholder" id="placeholder">
+        <b>Upload an image, then press “Remove background”.</b><br />
+        It runs a real cutout model right in your browser (no upload to any server).<br />
+        The first run downloads the model once (~40&nbsp;MB), then it's cached.
+      </div>
+    </div>
+    <div class="statusbar" id="statusbar"><span class="dot"></span><span id="statusText">Ready. Upload an image to begin.</span></div>
+  </main>
+
+  <script src="tray.js"></script>
+  <script type="module">
+    import { removeBackground } from "https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/+esm";
+
+    const el = {
+      fileInput: document.getElementById("fileInput"),
+      uploadBtn: document.getElementById("uploadBtn"),
+      removeBtn: document.getElementById("removeBtn"),
+      downloadBtn: document.getElementById("downloadBtn"),
+      sendTrayBtn: document.getElementById("sendTrayBtn"),
+      holder: document.getElementById("holder"),
+      stageImg: document.getElementById("stageImg"),
+      placeholder: document.getElementById("placeholder"),
+      statusbar: document.getElementById("statusbar"),
+      statusText: document.getElementById("statusText"),
+    };
+
+    let sourceBlob = null;   // original
+    let resultBlob = null;   // cut-out
+    let baseName = "image";
+
+    function setStatus(msg, cls) {
+      el.statusText.textContent = msg;
+      el.statusbar.className = "statusbar" + (cls ? " " + cls : "");
+    }
+    function showImage(blob) {
+      const url = URL.createObjectURL(blob);
+      el.stageImg.src = url;
+      el.holder.style.display = "block";
+      el.placeholder.style.display = "none";
+    }
+    function loadSource(blob, name) {
+      sourceBlob = blob;
+      resultBlob = null;
+      if (name) baseName = name.replace(/\.[^.]+$/, "");
+      showImage(blob);
+      el.removeBtn.disabled = false;
+      el.downloadBtn.disabled = false;   // can download original too
+      el.sendTrayBtn.disabled = false;
+      setStatus("Image loaded. Press “Remove background”.", "");
+    }
+
+    el.uploadBtn.addEventListener("click", () => el.fileInput.click());
+    el.fileInput.addEventListener("change", e => {
+      const f = e.target.files[0];
+      if (!f || !f.type.startsWith("image/")) return;
+      loadSource(f, f.name);
+      el.fileInput.value = "";
+    });
+
+    el.removeBtn.addEventListener("click", async () => {
+      if (!sourceBlob) return;
+      el.removeBtn.disabled = true; el.uploadBtn.disabled = true;
+      setStatus("Loading model & processing… first run downloads it once.", "working");
+      try {
+        const blob = await removeBackground(sourceBlob, {
+          progress: (key, cur, tot) => {
+            const pct = tot ? Math.round((cur / tot) * 100) : 0;
+            const label = key.startsWith("fetch") ? "Downloading model" : "Processing";
+            setStatus(`${label}… ${pct}%`, "working");
+          },
+        });
+        resultBlob = blob;
+        showImage(blob);
+        setStatus("Done ✓ background removed. Download or send to Tray.", "done");
+      } catch (err) {
+        console.error(err);
+        setStatus("Failed: " + (err && err.message ? err.message : err) + " (needs internet on first run).", "err");
+      } finally {
+        el.removeBtn.disabled = false; el.uploadBtn.disabled = false;
+      }
+    });
+
+    el.downloadBtn.addEventListener("click", () => {
+      const blob = resultBlob || sourceBlob;
+      if (!blob) return;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = resultBlob ? `${baseName}-nobg.png` : `${baseName}.png`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    });
+
+    el.sendTrayBtn.addEventListener("click", async () => {
+      const blob = resultBlob || sourceBlob;
+      if (!blob) return;
+      await window.Tray.add(blob, resultBlob ? `${baseName}-nobg.png` : `${baseName}.png`);
+      setStatus("Sent to Tray 🗂 — open it on any page to reuse.", "done");
+    });
+
+    // Receive an image from the Tray (sent from another page)
+    window.TRAY_USE_LABEL = "Use as source";
+    window.TRAY_IMPORT = (blob, name) => {
+      loadSource(blob, name);
+      if (window.TrayUI) window.TrayUI.close();
+    };
+  </script>
+</body>
+</html>

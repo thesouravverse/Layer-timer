@@ -33,6 +33,10 @@
   header h1 span { color: var(--accent); }
   .nav-link { color: var(--muted); font-size: 12px; text-decoration: none; border: 1px solid var(--line); padding: 6px 10px; border-radius: 8px; }
   .nav-link:hover { color: var(--text); border-color: var(--accent); }
+  .topnav{display:flex;align-items:center;gap:6px}
+  .topnav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;padding:6px 10px;border-radius:8px;border:1px solid transparent}
+  .topnav a:hover{color:var(--text);border-color:var(--line)}
+  .topnav a.active{color:#fff;background:var(--panel-2);border-color:var(--line)}
 
   .mode-toggle { display: flex; background: var(--panel-2); border-radius: 999px; padding: 3px; }
   .mode-toggle button {
@@ -111,7 +115,12 @@
 <body>
   <header>
     <h1>One <span>→</span> Many</h1>
-    <a class="nav-link" href="index.html">← Image Timer</a>
+    <nav class="topnav">
+      <a href="index.html">Layer Timer</a>
+      <a href="one-to-many.html" class="active">One → Many</a>
+      <a href="bg-remover.html">Bg Remover</a>
+      <button id="trayBtn" class="btn" style="padding:6px 10px;">🗂 Tray <b id="trayCount">0</b></button>
+    </nav>
     <div class="mode-toggle" id="modeToggle">
       <button data-mode="grid" class="active">Grid</button>
       <button data-mode="rect">Rectangles</button>
@@ -160,6 +169,7 @@
       </div>
       <div class="res-actions">
         <button class="btn" id="downloadAllBtn">⤓ Download all (.zip)</button>
+        <button class="btn" id="trayAllBtn">🗂 All → Tray</button>
         <button class="btn ghost" id="clearResultsBtn">Clear</button>
       </div>
       <div class="results" id="results">
@@ -168,6 +178,7 @@
     </aside>
   </main>
 
+<script src="tray.js"></script>
 <script>
 (() => {
   "use strict";
@@ -213,6 +224,7 @@
     resEmpty: document.getElementById("resEmpty"),
     pieceCount: document.getElementById("pieceCount"),
     downloadAllBtn: document.getElementById("downloadAllBtn"),
+    trayAllBtn: document.getElementById("trayAllBtn"),
     clearResultsBtn: document.getElementById("clearResultsBtn"),
   };
   const octx = el.overlay.getContext("2d");
@@ -228,7 +240,11 @@
   el.fileInput.addEventListener("change", e => {
     const f = e.target.files[0];
     if (!f || !f.type.startsWith("image/")) return;
-    const url = URL.createObjectURL(f);
+    setBase(URL.createObjectURL(f));
+    el.fileInput.value = "";
+  });
+
+  function setBase(url) {
     const img = new Image();
     img.onload = () => {
       baseImage = img;
@@ -244,8 +260,14 @@
       setHint();
     };
     img.src = url;
-    el.fileInput.value = "";
-  });
+  }
+
+  // Receive an image from the Tray (e.g. a cutout from Bg Remover)
+  window.TRAY_USE_LABEL = "Use as source";
+  window.TRAY_IMPORT = (blob, name) => {
+    setBase(URL.createObjectURL(blob));
+    if (window.TrayUI) window.TrayUI.close();
+  };
 
   // ---------- Mode ----------
   el.modeToggle.addEventListener("click", e => {
@@ -513,9 +535,11 @@
         <div class="pv"><img src="${url}" /></div>
         <div class="prow">
           <button class="btn dl">⤓ Save</button>
+          <button class="btn tray" title="Send to Tray">🗂</button>
           <button class="btn ghost rm">✕</button>
         </div>`;
       div.querySelector(".dl").addEventListener("click", () => downloadCanvas(pc));
+      div.querySelector(".tray").addEventListener("click", () => window.Tray.addCanvas(pc.canvas, pc.name));
       div.querySelector(".rm").addEventListener("click", () => { pieces.splice(i, 1); renderResults(); });
       el.results.appendChild(div);
     });
@@ -534,6 +558,14 @@
   el.clearResultsBtn.addEventListener("click", () => {
     if (pieces.length && !confirm("Clear all pieces?")) return;
     pieces = []; pieceId = 1; renderResults();
+  });
+
+  el.trayAllBtn.addEventListener("click", async () => {
+    if (!pieces.length) { alert("Nothing to send yet."); return; }
+    el.trayAllBtn.disabled = true;
+    for (const pc of pieces) await window.Tray.addCanvas(pc.canvas, pc.name);
+    el.trayAllBtn.disabled = false;
+    alert("Sent " + pieces.length + " piece(s) to the Tray.");
   });
 
   // ---------- Download all as ZIP (store, no external libs) ----------

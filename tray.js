@@ -78,9 +78,10 @@
   .tray-actions{display:flex;gap:8px;padding:10px 12px;border-bottom:1px solid #2a3040}
   .tray-actions button{flex:1;background:#1f2430;border:1px solid #2a3040;color:#e6e9ef;border-radius:8px;padding:7px;cursor:pointer;font-size:12px;font-weight:600}
   .tray-actions button:hover{border-color:#5b8cff}
-  .tray-list{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:10px}
+  .tray-list{flex:1;min-height:0;overflow-x:hidden;overflow-y:scroll;padding:10px;display:flex;flex-direction:column;gap:14px;
+    overscroll-behavior:contain;touch-action:pan-y;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable}
   .tray-empty{color:#8b93a7;text-align:center;padding:30px 16px;font-size:13px;line-height:1.6}
-  .tray-item{background:#1f2430;border:1px solid #2a3040;border-radius:10px;overflow:hidden}
+  .tray-item{flex:0 0 auto;height:auto;min-height:0;background:#1f2430;border:1px solid #2a3040;border-radius:10px;overflow:hidden}
   .tray-item .pv{height:110px;display:flex;align-items:center;justify-content:center;padding:6px;
     background:linear-gradient(45deg,#20242e 25%,transparent 25%,transparent 75%,#20242e 75%),linear-gradient(45deg,#20242e 25%,#171a21 25%,#171a21 75%,#20242e 75%);
     background-size:14px 14px;background-position:0 0,7px 7px}
@@ -103,8 +104,8 @@
 
   const overrideCss = `
   html,body{overscroll-behavior:none;touch-action:manipulation}
-  .tray-panel{width:360px}
-  @media (max-width:820px){ .tray-panel{width:88vw;max-width:88vw} }
+  .tray-panel{width:min(720px,62vw);max-width:100vw}
+  @media (max-width:820px){ .tray-panel{width:100vw;max-width:100vw} }
   .tray-actions{padding:10px 12px 6px}
   .tray-sel{display:flex;align-items:center;gap:8px;padding:0 12px 10px;border-bottom:1px solid #2a3040;color:#8b93a7;font-size:12px}
   .tray-sel label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
@@ -112,12 +113,15 @@
   .tray-sel button{background:#1f2430;border:1px solid #2a3040;color:#e6e9ef;border-radius:7px;padding:6px 10px;cursor:pointer;font-size:14px}
   .tray-sel button:hover{border-color:#5b8cff}
   .tray-hint{padding:6px 12px;color:#8b93a7;font-size:11px}
-  .tray-item{cursor:grab}
+  .tray-list{min-height:0!important;overflow-y:scroll!important;overflow-x:hidden!important;touch-action:pan-y!important;-webkit-overflow-scrolling:touch!important}
+  .tray-item{display:block!important;flex:0 0 auto!important;height:auto!important;max-height:none!important;overflow:hidden!important;cursor:grab}
   .tray-item.sel{border-color:#5b8cff;box-shadow:0 0 0 1px #5b8cff inset}
   .tray-item:active{cursor:grabbing}
-  .tray-item .pvwrap{position:relative}
-  .tray-item .pv{height:auto;min-height:auto;padding:0}
-  .tray-item .pv img{width:100%;height:auto;max-height:none;object-fit:contain;display:block}
+  .tray-item .pvwrap{display:block!important;position:relative;height:auto!important;max-height:none!important;overflow:visible!important}
+  .tray-item .pv{display:block!important;width:100%!important;height:auto!important;min-height:0!important;max-height:none!important;padding:0!important;overflow:visible!important;line-height:0!important}
+  .tray-item .pv img{display:block!important;width:100%!important;height:auto!important;min-height:0!important;max-width:100%!important;max-height:none!important;object-fit:contain!important;object-position:center!important}
+  .tray-item .nm{display:block!important;visibility:visible!important;opacity:1!important;min-height:22px!important;padding:7px 9px 2px!important}
+  .tray-item .row{display:flex!important;visibility:visible!important;opacity:1!important;min-height:44px!important}
   .tray-item .cb{position:absolute;top:8px;left:8px;width:22px;height:22px;cursor:pointer;z-index:2}
   .tray-item .row{flex-wrap:wrap}
   .tray-item .row button{min-width:52px}

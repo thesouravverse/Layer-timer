@@ -89,6 +89,8 @@
   body.results-collapsed aside { display: none; }
   .reopen-pieces { position: fixed; right: 14px; bottom: 14px; z-index: 60; display: none; }
   body.results-collapsed .reopen-pieces { display: inline-flex; }
+  .fab-cut { position: fixed; left: 14px; bottom: 14px; z-index: 60; display: none; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  @media (pointer: coarse) { .fab-cut { display: inline-flex; } }
   @media (max-width: 860px) {
     aside { width: 44vw; min-width: 200px; }
     header { gap: 8px; }
@@ -151,6 +153,7 @@
 
     <div class="spacer"></div>
 
+    <label style="display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:12px;cursor:pointer;" title="Ignore finger/palm touches; draw only with Apple Pencil"><input type="checkbox" id="penOnly" /> ✎ Pencil only</label>
     <input type="file" id="fileInput" accept="image/*" hidden />
     <button class="btn" id="uploadBtn">＋ Upload image</button>
       <button class="btn ghost" id="undoBtn" title="Remove last drawn shape / grid line">↶ Undo</button>
@@ -194,6 +197,7 @@
   </main>
 
   <button class="btn primary reopen-pieces" id="reopenResults">🧩 Pieces (<span id="reopenCount">0</span>)</button>
+  <button class="btn primary fab-cut" id="fabCut">✂ Cut all</button>
 
 <script src="tray.js"></script>
 <script>
@@ -220,6 +224,7 @@
   let curPath = null;
   let dragTarget = null;     // {type:'line'|'node', axis, idx, pi?} during grid drag
   let lastP = null;          // last pointer pos for whole-line dragging
+  let activePointer = null;  // id of the pointer that owns the current interaction (palm rejection)
 
   const el = {
     fileInput: document.getElementById("fileInput"),
@@ -253,6 +258,8 @@
     collapseResults: document.getElementById("collapseResults"),
     reopenResults: document.getElementById("reopenResults"),
     reopenCount: document.getElementById("reopenCount"),
+    penOnly: document.getElementById("penOnly"),
+    fabCut: document.getElementById("fabCut"),
   };
   const octx = el.overlay.getContext("2d");
 
@@ -495,6 +502,9 @@
   // ---------- Drawing interaction ----------
   el.overlay.addEventListener("pointerdown", e => {
     if (!baseImage) return;
+    if (el.penOnly.checked && e.pointerType !== "pen") return;   // Pencil-only mode
+    if (activePointer !== null) return;                          // a pointer is already active -> ignore palm/2nd touch
+    activePointer = e.pointerId;
     e.preventDefault();
     if (mode === "grid") {
       const p = toImageCoords(e), sc = ovScale();
@@ -513,6 +523,7 @@
     else curPath = [startPt];
   });
   el.overlay.addEventListener("pointermove", e => {
+    if (activePointer !== null && e.pointerId !== activePointer) return; // ignore other (palm) pointers mid-drag
     if (mode === "grid") {
       const p = toImageCoords(e);
       if (dragTarget) {
@@ -535,7 +546,9 @@
     }
     redrawOverlay();
   });
-  el.overlay.addEventListener("pointerup", () => {
+  el.overlay.addEventListener("pointerup", (e) => {
+    if (activePointer !== null && e.pointerId !== activePointer) return;
+    activePointer = null;
     if (dragTarget) { dragTarget = null; return; }
     if (!drawing) return;
     drawing = false;
@@ -558,6 +571,7 @@
   // iPad / Apple Pencil: stop the copy/cut/select callout while working on the canvas
   el.overlay.addEventListener("contextmenu", e => e.preventDefault());
   el.overlay.addEventListener("selectstart", e => e.preventDefault());
+  el.overlay.addEventListener("pointercancel", () => { activePointer = null; dragTarget = null; drawing = false; });
 
   // ---------- Overlay rendering ----------
   function redrawOverlay() {
@@ -757,6 +771,7 @@
 
   el.collapseResults.addEventListener("click", () => document.body.classList.add("results-collapsed"));
   el.reopenResults.addEventListener("click", () => document.body.classList.remove("results-collapsed"));
+  el.fabCut.addEventListener("click", cutAll);
 
   el.trayAllBtn.addEventListener("click", async () => {
     if (!pieces.length) { alert("Nothing to send yet."); return; }

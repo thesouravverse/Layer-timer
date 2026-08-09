@@ -44,6 +44,8 @@
   .topnav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;padding:6px 10px;border-radius:8px;border:1px solid transparent}
   .topnav a:hover{color:var(--text);border-color:var(--line)}
   .topnav a.active{color:#fff;background:var(--panel-2);border-color:var(--line)}
+  .fab-play{position:fixed;right:14px;bottom:14px;z-index:60;display:none;box-shadow:0 6px 20px rgba(0,0,0,.4)}
+  @media (pointer:coarse){ .fab-play{display:inline-flex} }
 
   .mode-toggle { display: flex; background: var(--panel-2); border-radius: 999px; padding: 3px; }
   .mode-toggle button {
@@ -220,6 +222,8 @@
     </div>
   </main>
 
+<button class="btn primary fab-play" id="fabPlay">▶ Play</button>
+
 <script src="tray.js"></script>
 <script>
 (() => {
@@ -345,12 +349,14 @@
     lastTs = 0;
     el.playBtn.innerHTML = "⏸ Pause";
     el.playBtn.classList.remove("primary");
+    const f = document.getElementById("fabPlay"); if (f) f.textContent = "⏸ Pause";
     requestAnimationFrame(tick);
   }
   function pause() {
     playing = false;
     el.playBtn.innerHTML = "▶ Play";
     el.playBtn.classList.add("primary");
+    const f = document.getElementById("fabPlay"); if (f) f.textContent = "▶ Play";
   }
   function stop() {
     pause();
@@ -663,6 +669,8 @@
     renderStage();
     if (window.TrayUI) window.TrayUI.close();
   };
+
+  document.getElementById("fabPlay")?.addEventListener("click", () => (playing ? pause() : play()));
 
   // init
   renderStage();

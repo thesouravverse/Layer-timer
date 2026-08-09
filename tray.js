@@ -102,7 +102,9 @@
   let draggingId = null;
 
   const overrideCss = `
+  html,body{overscroll-behavior:none;touch-action:manipulation}
   .tray-panel{width:360px}
+  @media (max-width:820px){ .tray-panel{width:88vw;max-width:88vw} }
   .tray-actions{padding:10px 12px 6px}
   .tray-sel{display:flex;align-items:center;gap:8px;padding:0 12px 10px;border-bottom:1px solid #2a3040;color:#8b93a7;font-size:12px}
   .tray-sel label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
@@ -114,12 +116,20 @@
   .tray-item.sel{border-color:#5b8cff;box-shadow:0 0 0 1px #5b8cff inset}
   .tray-item:active{cursor:grabbing}
   .tray-item .pvwrap{position:relative}
-  .tray-item .pv{min-height:auto;padding:0}
+  .tray-item .pv{height:auto;min-height:auto;padding:0}
   .tray-item .pv img{width:100%;height:auto;max-height:none;object-fit:contain;display:block}
   .tray-item .cb{position:absolute;top:8px;left:8px;width:22px;height:22px;cursor:pointer;z-index:2}
   .tray-item .row{flex-wrap:wrap}
   .tray-item .row button{min-width:52px}
   .tray-item .row button.use{flex-basis:100%;background:#5b8cff;border-color:#5b8cff;color:#fff}
+  @media (pointer:coarse){
+    button.btn{min-height:42px}
+    .mode-toggle button{min-height:40px}
+    .tray-actions button{min-height:44px}
+    .tray-sel button{min-height:44px;min-width:46px;font-size:16px}
+    .tray-item .row button{min-height:44px;font-size:13px}
+    .tray-item .cb{width:26px;height:26px}
+  }
   `;
 
   function buildUI() {

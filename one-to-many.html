@@ -73,9 +73,9 @@
     flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
     overflow: auto; padding: 20px;
   }
-  .canvas-holder { position: relative; line-height: 0; }
+  .canvas-holder { position: relative; line-height: 0; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .canvas-holder canvas { display: block; max-width: 100%; max-height: calc(100vh - 160px); }
-  #overlay { position: absolute; inset: 0; cursor: crosshair; }
+  #overlay { position: absolute; inset: 0; cursor: crosshair; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .stage .placeholder { color: var(--muted); font-size: 14px; text-align: center; line-height: 1.8; }
   .stage .placeholder b { color: var(--text); }
   .hint-bar { padding: 8px 16px; font-size: 12px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); }
@@ -85,6 +85,13 @@
   aside {
     width: 320px; min-width: 280px; background: var(--panel);
     border-left: 1px solid var(--line); display: flex; flex-direction: column;
+  }
+  body.results-collapsed aside { display: none; }
+  .reopen-pieces { position: fixed; right: 14px; bottom: 14px; z-index: 60; display: none; }
+  body.results-collapsed .reopen-pieces { display: inline-flex; }
+  @media (max-width: 860px) {
+    aside { width: 44vw; min-width: 200px; }
+    header { gap: 8px; }
   }
   .res-head { padding: 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
   .res-head .count { font-size: 13px; color: var(--muted); }
@@ -172,6 +179,8 @@
     <aside>
       <div class="res-head">
         <span class="count">Pieces: <b id="pieceCount">0</b></span>
+        <span style="flex:1"></span>
+        <button class="btn ghost" id="collapseResults" title="Hide the pieces panel">⟩ Hide</button>
       </div>
       <div class="res-actions">
         <button class="btn" id="downloadAllBtn">⤓ Download all (.zip)</button>
@@ -183,6 +192,8 @@
       </div>
     </aside>
   </main>
+
+  <button class="btn primary reopen-pieces" id="reopenResults">🧩 Pieces (<span id="reopenCount">0</span>)</button>
 
 <script src="tray.js"></script>
 <script>
@@ -239,6 +250,9 @@
     downloadAllBtn: document.getElementById("downloadAllBtn"),
     trayAllBtn: document.getElementById("trayAllBtn"),
     clearResultsBtn: document.getElementById("clearResultsBtn"),
+    collapseResults: document.getElementById("collapseResults"),
+    reopenResults: document.getElementById("reopenResults"),
+    reopenCount: document.getElementById("reopenCount"),
   };
   const octx = el.overlay.getContext("2d");
 
@@ -481,6 +495,7 @@
   // ---------- Drawing interaction ----------
   el.overlay.addEventListener("pointerdown", e => {
     if (!baseImage) return;
+    e.preventDefault();
     if (mode === "grid") {
       const p = toImageCoords(e), sc = ovScale();
       lastP = p;
@@ -540,6 +555,9 @@
     insertDotAt((hl.axis === "v" ? vlines : hlines)[hl.idx], hl.axis, p);
     redrawOverlay();
   });
+  // iPad / Apple Pencil: stop the copy/cut/select callout while working on the canvas
+  el.overlay.addEventListener("contextmenu", e => e.preventDefault());
+  el.overlay.addEventListener("selectstart", e => e.preventDefault());
 
   // ---------- Overlay rendering ----------
   function redrawOverlay() {
@@ -701,6 +719,7 @@
   // ---------- Results ----------
   function renderResults() {
     el.pieceCount.textContent = pieces.length;
+    if (el.reopenCount) el.reopenCount.textContent = pieces.length;
     el.resEmpty.style.display = pieces.length ? "none" : "block";
     [...el.results.querySelectorAll(".piece")].forEach(n => n.remove());
     pieces.forEach((pc, i) => {
@@ -735,6 +754,9 @@
     if (pieces.length && !confirm("Clear all pieces?")) return;
     pieces = []; pieceId = 1; renderResults();
   });
+
+  el.collapseResults.addEventListener("click", () => document.body.classList.add("results-collapsed"));
+  el.reopenResults.addEventListener("click", () => document.body.classList.remove("results-collapsed"));
 
   el.trayAllBtn.addEventListener("click", async () => {
     if (!pieces.length) { alert("Nothing to send yet."); return; }

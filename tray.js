@@ -97,7 +97,7 @@
   style.textContent = css;
   document.head.appendChild(style);
 
-  let panel, listEl, backdrop, countEl, lightbox;
+  let panel, listEl, backdrop, countEl;
   const selected = new Set();
   let draggingId = null;
 
@@ -114,17 +114,12 @@
   .tray-item.sel{border-color:#5b8cff;box-shadow:0 0 0 1px #5b8cff inset}
   .tray-item:active{cursor:grabbing}
   .tray-item .pvwrap{position:relative}
-  .tray-item .pv{min-height:150px}
-  .tray-item .pv img{max-height:240px;object-fit:contain}
-  .tray-item .cb{position:absolute;top:6px;left:6px;width:18px;height:18px;cursor:pointer;z-index:2}
-  .tray-item .zoom{position:absolute;top:6px;right:6px;background:rgba(15,17,21,.75);border:1px solid #2a3040;color:#e6e9ef;border-radius:6px;font-size:12px;padding:2px 7px;cursor:pointer;z-index:2}
+  .tray-item .pv{min-height:auto;padding:0}
+  .tray-item .pv img{width:100%;height:auto;max-height:none;object-fit:contain;display:block}
+  .tray-item .cb{position:absolute;top:8px;left:8px;width:22px;height:22px;cursor:pointer;z-index:2}
   .tray-item .row{flex-wrap:wrap}
   .tray-item .row button{min-width:52px}
   .tray-item .row button.use{flex-basis:100%;background:#5b8cff;border-color:#5b8cff;color:#fff}
-  .tray-light{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:10000;display:none;align-items:center;justify-content:center;padding:24px;
-    background-image:linear-gradient(45deg,#1a1d24 25%,transparent 25%,transparent 75%,#1a1d24 75%),linear-gradient(45deg,#1a1d24 25%,#0b0d11 25%,#0b0d11 75%,#1a1d24 75%);background-size:24px 24px;background-position:0 0,12px 12px}
-  .tray-light.open{display:flex}
-  .tray-light img{max-width:96%;max-height:96%;object-fit:contain}
   `;
 
   function buildUI() {
@@ -154,12 +149,6 @@
       <div class="tray-list"></div>`;
     document.body.appendChild(panel);
     listEl = panel.querySelector(".tray-list");
-
-    lightbox = document.createElement("div");
-    lightbox.className = "tray-light";
-    lightbox.innerHTML = `<img alt="" />`;
-    lightbox.addEventListener("click", () => lightbox.classList.remove("open"));
-    document.body.appendChild(lightbox);
 
     panel.querySelector(".tray-x").addEventListener("click", close);
     panel.querySelector('[data-a="refresh"]').addEventListener("click", refresh);
@@ -213,7 +202,6 @@
       div.innerHTML = `
         <div class="pvwrap">
           <input type="checkbox" class="cb" ${selected.has(it.id) ? "checked" : ""} />
-          <button class="zoom" title="Enlarge">⤢</button>
           <div class="pv"><img src="${url}" /></div>
         </div>
         <div class="nm">${escapeHtml(it.name)}</div>
@@ -230,7 +218,6 @@
         div.classList.toggle("sel", e.target.checked);
         if (selAll) selAll.checked = selected.size === items.length;
       });
-      div.querySelector(".zoom").addEventListener("click", () => { lightbox.querySelector("img").src = url; lightbox.classList.add("open"); });
       div.querySelector(".dl").addEventListener("click", () => downloadItem(it, url));
       div.querySelector(".dup").addEventListener("click", async () => { await Tray.duplicate(it.id); refresh(); });
       div.querySelector(".rm").addEventListener("click", async () => { selected.delete(it.id); await Tray.remove(it.id); refresh(); });

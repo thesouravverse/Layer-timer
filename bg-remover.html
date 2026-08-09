@@ -82,7 +82,8 @@
     <div class="statusbar" id="statusbar"><span class="dot"></span><span id="statusText">Ready. Upload an image to begin.</span></div>
   </main>
 
-  <script src="tray.js?v=20260809-side-workspace-2"></script>
+  <script src="tray.js?v=20260809-project-3"></script>
+  <script src="project.js?v=20260809-project-3"></script>
   <script>
     // Load the background-removal model lazily so the Tray wiring below is
     // never blocked by the CDN (important on restricted networks).
@@ -115,6 +116,8 @@
     let baseName = "image";
     let srcTrayId = null;    // id of the Tray item this source came from (for in-place update)
     const HAS_GPU = typeof navigator !== "undefined" && !!navigator.gpu;
+    let gpuFailed = false;
+    let stageUrl = null;
 
     // Shrink very large inputs so applying/encoding the cutout stays fast.
     async function downscaleBlob(blob, maxDim) {
@@ -135,7 +138,9 @@
       el.statusbar.className = "statusbar" + (cls ? " " + cls : "");
     }
     function showImage(blob) {
+      if (stageUrl) URL.revokeObjectURL(stageUrl);
       const url = URL.createObjectURL(blob);
+      stageUrl = url;
       el.stageImg.src = url;
       el.holder.style.display = "block";
       el.placeholder.style.display = "none";
@@ -150,6 +155,7 @@
       el.sendTrayBtn.disabled = false;
       el.updateTrayBtn.disabled = true;  // enabled after an edit, only if from Tray
       setStatus("Image loaded. Press “Remove background”.", "");
+      if (window.ProjectStore) window.ProjectStore.markDirty();
     }
 
     el.uploadBtn.addEventListener("click", () => el.fileInput.click());
@@ -169,9 +175,8 @@
       try {
         const rb = await ensureRemover();
         const input = await downscaleBlob(sourceBlob, 2048);
-        const blob = await rb(input, {
+        const config = {
           model: el.qualitySel.value,        // isnet_quint8 (fast) | isnet_fp16 | isnet (best)
-          device: HAS_GPU ? "gpu" : "cpu",   // WebGPU when available = much faster
           proxyToWorker: true,               // keep the UI responsive
           output: { format: "image/png" },
           progress: (key, cur, tot) => {
@@ -179,11 +184,23 @@
             const label = key.startsWith("fetch") ? "Downloading model" : "Processing";
             setStatus(`${label}… ${pct}%`, "working");
           },
-        });
+        };
+        let blob;
+        if (HAS_GPU && !gpuFailed) {
+          try {
+            blob = await rb(input, { ...config, device: "gpu" });
+          } catch (gpuError) {
+            gpuFailed = true;
+            console.warn("WebGPU background removal failed; retrying safely on CPU", gpuError);
+            setStatus("GPU is incompatible in this browser — retrying on CPU…", "working");
+          }
+        }
+        if (!blob) blob = await rb(input, { ...config, device: "cpu" });
         resultBlob = blob;
         showImage(blob);
         el.updateTrayBtn.disabled = srcTrayId == null;
         setStatus("Done ✓ background removed. Download or send to Tray.", "done");
+        if (window.ProjectStore) window.ProjectStore.markDirty();
       } catch (err) {
         console.error(err);
         setStatus("Failed: " + (err && err.message ? err.message : err) + " (needs internet on first run).", "err");
@@ -208,6 +225,7 @@
       await window.Tray.add(blob, resultBlob ? `${baseName}-nobg.png` : `${baseName}.png`);
       setStatus("Sent to Tray 🗂 — open it on any page to reuse.", "done");
       if (window.TrayUI) window.TrayUI.refresh();
+      if (window.ProjectStore) window.ProjectStore.markDirty();
     });
 
     el.updateTrayBtn.addEventListener("click", async () => {
@@ -217,6 +235,7 @@
       await window.Tray.update(srcTrayId, blob, resultBlob ? `${baseName}-nobg.png` : `${baseName}.png`);
       setStatus("Updated that Tray item ♻ — same slot, new image.", "done");
       if (window.TrayUI) window.TrayUI.refresh();
+      if (window.ProjectStore) window.ProjectStore.markDirty();
     });
 
     // Receive an image from the Tray (sent from another page)
@@ -226,6 +245,39 @@
       loadSource(blob, name);
       if (window.TrayUI) window.TrayUI.close();
     };
+
+    // ---------- Project persistence ----------
+    async function serializeBgRemover() {
+      return {
+        version: 1,
+        sourceBlob,
+        resultBlob,
+        baseName,
+        srcTrayId,
+        quality: el.qualitySel.value,
+      };
+    }
+
+    async function restoreBgRemover(state) {
+      sourceBlob = state.sourceBlob || null;
+      resultBlob = state.resultBlob || null;
+      baseName = state.baseName || "image";
+      srcTrayId = state.srcTrayId == null ? null : state.srcTrayId;
+      if (["isnet_quint8", "isnet_fp16", "isnet"].includes(state.quality)) el.qualitySel.value = state.quality;
+      const display = resultBlob || sourceBlob;
+      if (!display) return;
+      showImage(display);
+      el.removeBtn.disabled = !sourceBlob;
+      el.downloadBtn.disabled = false;
+      el.sendTrayBtn.disabled = false;
+      el.updateTrayBtn.disabled = !(resultBlob && srcTrayId != null);
+      setStatus(resultBlob ? "Restored removed-background result ✓" : "Source restored. Press “Remove background”.", resultBlob ? "done" : "");
+    }
+
+    if (window.ProjectStore) window.ProjectStore.register("bgRemover", {
+      serialize: serializeBgRemover,
+      restore: restoreBgRemover,
+    });
   </script>
 </body>
 </html>

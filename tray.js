@@ -30,11 +30,11 @@
   }
 
   const Tray = {
-    add(blob, name) { return withStore("readwrite", s => s.add({ name: name || `image-${Date.now()}.png`, blob, ts: Date.now() })).then(id => { updateCount(); return id; }); },
+    add(blob, name) { return withStore("readwrite", s => s.add({ name: name || `image-${Date.now()}.png`, blob, ts: Date.now() })).then(id => { updateCount(); notifyProject(); return id; }); },
     all() { return withStore("readonly", s => s.getAll()); },
     get(id) { return withStore("readonly", s => s.get(id)); },
-    remove(id) { return withStore("readwrite", s => s.delete(id)).then(r => { updateCount(); return r; }); },
-    clear() { return withStore("readwrite", s => s.clear()).then(r => { updateCount(); return r; }); },
+    remove(id) { return withStore("readwrite", s => s.delete(id)).then(r => { updateCount(); notifyProject(); return r; }); },
+    clear() { return withStore("readwrite", s => s.clear()).then(r => { updateCount(); notifyProject(); return r; }); },
     count() { return withStore("readonly", s => s.count()); },
     async addCanvas(canvas, name) {
       const blob = await new Promise(r => canvas.toBlob(r, "image/png"));
@@ -50,7 +50,7 @@
           rec.blob = blob; rec.ts = Date.now();
           if (name) rec.name = name;
           const p = st.put(rec);
-          p.onsuccess = () => res(id);
+          p.onsuccess = () => { notifyProject(); res(id); };
           p.onerror = () => rej(p.error);
         };
         g.onerror = () => rej(g.error);
@@ -62,8 +62,24 @@
       const copy = it.blob.slice(0, it.blob.size, it.blob.type || "image/png");
       return Tray.add(copy, dupName(it.name));
     },
+    async replaceAll(items) {
+      const db = await openDB();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        const store = tx.objectStore(STORE);
+        store.clear();
+        (items || []).forEach(item => store.put(item));
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error("Tray restore was aborted"));
+      });
+      updateCount();
+      notifyProject();
+      if (window.TrayUI) window.TrayUI.refresh();
+    },
   };
   window.Tray = Tray;
+  function notifyProject() { if (window.ProjectStore) window.ProjectStore.markDirty(); }
   function dupName(n) { const m = String(n || "image.png").match(/^(.*?)(\.[^.]+)?$/); return (m[1] || "image") + " copy" + (m[2] || ".png"); }
 
   // ---------------- UI ----------------

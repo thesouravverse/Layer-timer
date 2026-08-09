@@ -230,7 +230,8 @@
   <button class="btn primary reopen-pieces" id="reopenResults">🧩 Pieces (<span id="reopenCount">0</span>)</button>
   <button class="btn primary fab-cut" id="fabCut">✂ Cut all</button>
 
-<script src="tray.js?v=20260809-side-workspace-2"></script>
+<script src="tray.js?v=20260809-project-3"></script>
+<script src="project.js?v=20260809-project-3"></script>
 <script>
 (() => {
   "use strict";
@@ -246,7 +247,7 @@
   let sources = [];          // independent editable images, each preserving its own cut setup
   let sourceId = 1;
   let activeSourceId = null;
-  let pieces = [];           // {name, canvas, parentSourceId, editSourceId?}
+  let pieces = [];           // {name, canvas, blob?, parentSourceId, editSourceId?}
   let pieceId = 1;
   let shapeId = 1;           // unique id per drawn shape
   let cutIds = new Set();    // per-source ids already cut -> prevents duplicates
@@ -329,12 +330,13 @@
       const img = new Image();
       img.onload = () => {
         const src = {
-          id: sourceId++, name: name || `source-${sourceId}.png`, url, img,
+          id: sourceId++, name: name || `source-${sourceId}.png`, blob, url, img,
           rects: [], lassos: [], vlines: [], hlines: [], selLine: null, cutIds: new Set(),
         };
         sources.push(src);
         renderSources();
         if (activate) activateSource(src.id);
+        if (window.ProjectStore) window.ProjectStore.markDirty();
         resolve(src);
       };
       img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not read image")); };
@@ -761,7 +763,7 @@
   function addPiece(canvas) {
     const src = sources.find(s => s.id === activeSourceId);
     const stem = String(src?.name || "image").replace(/\.[^.]+$/, "").replace(/[^a-z0-9_-]+/gi, "-").slice(0, 32);
-    pieces.push({ name: `${stem}-piece-${String(pieceId).padStart(3, "0")}.png`, canvas, parentSourceId: activeSourceId });
+    pieces.push({ name: `${stem}-piece-${String(pieceId).padStart(3, "0")}.png`, canvas, blob: null, parentSourceId: activeSourceId });
     pieceId++;
   }
 
@@ -903,12 +905,21 @@
       if (activate) { activateSource(pc.editSourceId); document.body.classList.add("results-collapsed"); }
       return Promise.resolve(sources.find(s => s.id === pc.editSourceId));
     }
-    return new Promise(resolve => pc.canvas.toBlob(async blob => {
-      const src = await addSourceBlob(blob, pc.name.replace(/\.png$/i, "-detail.png"), activate);
-      pc.editSourceId = src.id;
-      if (activate) document.body.classList.add("results-collapsed");
-      renderResults(); resolve(src);
-    }, "image/png"));
+    return new Promise((resolve, reject) => {
+      const create = async blob => {
+        try {
+          if (!blob) throw new Error("Could not prepare this piece for detailed cutting");
+          const src = await addSourceBlob(blob, pc.name.replace(/\.png$/i, "-detail.png"), activate);
+          pc.editSourceId = src.id;
+          if (activate) document.body.classList.add("results-collapsed");
+          renderResults();
+          if (window.ProjectStore) window.ProjectStore.markDirty();
+          resolve(src);
+        } catch (error) { reject(error); }
+      };
+      if (pc.blob) create(pc.blob);
+      else pc.canvas.toBlob(blob => { pc.blob = blob; create(blob); }, "image/png");
+    });
   }
 
   el.sourcesAllBtn.addEventListener("click", async () => {
@@ -1019,8 +1030,133 @@
   // ---------- utils ----------
   function clampInt(v, lo, hi) { let n = parseInt(v, 10); if (isNaN(n)) n = lo; return Math.max(lo, Math.min(hi, n)); }
 
+  // ---------- Project persistence ----------
+  function canvasToBlob(canvas) {
+    return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Could not save a cut piece")), "image/png"));
+  }
+
+  function imageFromBlob(blob) {
+    const url = URL.createObjectURL(blob);
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve({ img, url });
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not restore an image")); };
+      img.src = url;
+    });
+  }
+
+  async function canvasFromBlob(blob) {
+    const loaded = await imageFromBlob(blob);
+    const canvas = document.createElement("canvas");
+    canvas.width = loaded.img.naturalWidth;
+    canvas.height = loaded.img.naturalHeight;
+    canvas.getContext("2d").drawImage(loaded.img, 0, 0);
+    URL.revokeObjectURL(loaded.url);
+    return canvas;
+  }
+
+  async function serializeOneToMany() {
+    saveActiveSource();
+    const savedSources = await Promise.all(sources.map(async source => ({
+      id: source.id,
+      name: source.name,
+      blob: source.blob || await fetch(source.url).then(response => response.blob()),
+      rects: source.rects,
+      lassos: source.lassos,
+      vlines: source.vlines,
+      hlines: source.hlines,
+      selLine: source.selLine,
+      cutIds: [...source.cutIds],
+    })));
+    const savedPieces = await Promise.all(pieces.map(async piece => {
+      if (!piece.blob) piece.blob = await canvasToBlob(piece.canvas);
+      return {
+        name: piece.name,
+        blob: piece.blob,
+        parentSourceId: piece.parentSourceId,
+        editSourceId: piece.editSourceId || null,
+      };
+    }));
+    return {
+      version: 1,
+      sources: savedSources,
+      activeSourceId,
+      pieces: savedPieces,
+      sourceId,
+      pieceId,
+      shapeId,
+      lineId,
+      mode,
+      rows: el.rows.value,
+      cols: el.cols.value,
+      penOnly: el.penOnly.checked,
+      resultsCollapsed: document.body.classList.contains("results-collapsed"),
+    };
+  }
+
+  async function restoreOneToMany(state) {
+    sources.forEach(source => { if (source.url) URL.revokeObjectURL(source.url); });
+    sources = [];
+    pieces = [];
+    activeSourceId = null;
+    baseImage = null;
+    rects = []; lassos = []; vlines = []; hlines = []; selLine = null; cutIds = new Set();
+
+    for (const saved of state.sources || []) {
+      if (!saved.blob) continue;
+      const loaded = await imageFromBlob(saved.blob);
+      sources.push({
+        id: saved.id,
+        name: saved.name || "source.png",
+        blob: saved.blob,
+        url: loaded.url,
+        img: loaded.img,
+        rects: saved.rects || [],
+        lassos: saved.lassos || [],
+        vlines: saved.vlines || [],
+        hlines: saved.hlines || [],
+        selLine: saved.selLine || null,
+        cutIds: new Set(saved.cutIds || []),
+      });
+    }
+
+    for (const saved of state.pieces || []) {
+      if (!saved.blob) continue;
+      pieces.push({
+        name: saved.name || "piece.png",
+        canvas: await canvasFromBlob(saved.blob),
+        blob: saved.blob,
+        parentSourceId: saved.parentSourceId,
+        editSourceId: saved.editSourceId || null,
+      });
+    }
+
+    sourceId = Math.max(Number(state.sourceId) || 1, ...sources.map(source => Number(source.id) + 1 || 1));
+    pieceId = Math.max(Number(state.pieceId) || 1, pieces.length + 1);
+    shapeId = Number(state.shapeId) || 1;
+    lineId = Number(state.lineId) || 1;
+    mode = ["grid", "rect", "lasso"].includes(state.mode) ? state.mode : "grid";
+    el.rows.value = String(state.rows || 3);
+    el.cols.value = String(state.cols || 3);
+    el.penOnly.checked = !!state.penOnly;
+    [...el.modeToggle.querySelectorAll("button[data-mode]")].forEach(button => button.classList.toggle("active", button.dataset.mode === mode));
+    el.gridControls.style.display = mode === "grid" ? "inline-flex" : "none";
+    el.overlay.style.cursor = mode === "grid" ? "default" : "crosshair";
+    document.body.classList.toggle("results-collapsed", !!state.resultsCollapsed);
+    renderResults();
+    renderSources();
+
+    const requested = sources.find(source => source.id === state.activeSourceId) || sources[0];
+    if (requested) activateSource(requested.id);
+    else clearActiveCanvas();
+  }
+
   renderResults();
   setHint();
+  if (window.ProjectStore) window.ProjectStore.register("oneToMany", {
+    serialize: serializeOneToMany,
+    restore: restoreOneToMany,
+  });
 })();
 </script>
 </body>

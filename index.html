@@ -234,13 +234,14 @@
 
 <button class="btn primary fab-play" id="fabPlay">▶ Play</button>
 
-<script src="tray.js?v=20260809-side-workspace-2"></script>
+<script src="tray.js?v=20260809-project-3"></script>
+<script src="project.js?v=20260809-project-3"></script>
 <script>
 (() => {
   "use strict";
 
   // ---------- State ----------
-  let layers = [];          // { id, name, url, img, start, dur, visible }
+  let layers = [];          // { id, name, blob, url, img, start, dur, visible }
   let mode = "overlay";     // "overlay" | "seq"
   let playing = false;
   let playhead = 0;         // seconds
@@ -486,6 +487,7 @@
       layers.push({
         id: uid++,
         name: f.name.replace(/\.[^.]+$/, ""),
+        blob: f,
         url,
         img: null,
         start: +(layers.length * 0.2).toFixed(2), // stagger defaults in overlay
@@ -605,6 +607,59 @@
 
   function rgbToHex(r, g, b) {
     return "#" + [r, g, b].map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("");
+  }
+
+  // ---------- Project persistence ----------
+  async function serializeLayerTimer() {
+    const savedLayers = await Promise.all(layers.map(async layer => ({
+      id: layer.id,
+      name: layer.name,
+      blob: layer.blob || await fetch(layer.url).then(response => response.blob()),
+      start: layer.start,
+      dur: layer.dur,
+      visible: layer.visible,
+    })));
+    return {
+      version: 1,
+      layers: savedLayers,
+      mode,
+      playhead,
+      loop: el.loopChk.checked,
+      speed: el.speedSel.value,
+      background: el.bgColor.value,
+      uid,
+    };
+  }
+
+  async function restoreLayerTimer(state) {
+    pause();
+    layers.forEach(layer => { if (layer.url && layer.url.startsWith("blob:")) URL.revokeObjectURL(layer.url); });
+    layers = (state.layers || []).map(saved => {
+      const blob = saved.blob;
+      return {
+        id: saved.id,
+        name: saved.name || "layer",
+        blob,
+        url: URL.createObjectURL(blob),
+        img: null,
+        start: Number(saved.start) || 0,
+        dur: Math.max(0, Number(saved.dur) || 0),
+        visible: saved.visible !== false,
+      };
+    });
+    uid = Math.max(Number(state.uid) || 1, ...layers.map(layer => Number(layer.id) + 1 || 1));
+    mode = state.mode === "seq" ? "seq" : "overlay";
+    el.loopChk.checked = state.loop !== false;
+    el.speedSel.value = String(state.speed || "1");
+    setBackgroundColor(/^#[0-9a-f]{6}$/i.test(state.background || "") ? state.background : "#000000");
+    [...el.modeToggle.querySelectorAll("button[data-mode]")].forEach(button => button.classList.toggle("active", button.dataset.mode === mode));
+    document.body.classList.toggle("mode-seq", mode === "seq");
+    document.body.classList.toggle("mode-overlay", mode === "overlay");
+    buildLayerImages();
+    await Promise.all(layers.map(layer => layer.img && layer.img.decode ? layer.img.decode().catch(() => {}) : Promise.resolve()));
+    playhead = Math.max(0, Math.min(Number(state.playhead) || 0, totalDuration()));
+    renderLayers();
+    renderStage();
   }
 
   // ---------- MP4 / video export ----------
@@ -737,7 +792,7 @@
     layers.push({
       id: uid++,
       name: (name || "layer").replace(/\.[^.]+$/, ""),
-      url, img: null,
+      blob, url, img: null,
       start: +(layers.length * 0.2).toFixed(2),
       dur: 0.2,
       visible: true,
@@ -745,12 +800,17 @@
     buildLayerImages();
     renderLayers();
     renderStage();
+    if (window.ProjectStore) window.ProjectStore.markDirty();
   };
 
   document.getElementById("fabPlay")?.addEventListener("click", () => (playing ? pause() : play()));
 
   // init
   renderStage();
+  if (window.ProjectStore) window.ProjectStore.register("layerTimer", {
+    serialize: serializeLayerTimer,
+    restore: restoreLayerTimer,
+  });
 })();
 </script>
 </body>

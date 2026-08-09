@@ -125,13 +125,22 @@
       radial-gradient(circle at center, #14171e 0%, #0b0d11 100%);
     overflow: hidden;
   }
+  .stage.picking-color { cursor: crosshair; touch-action: none; }
+  .stage.picking-color::after {
+    content: "Tap an image pixel to set the background • tap Pick again to cancel";
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 100;
+    max-width: calc(100% - 24px); padding: 8px 12px; border: 1px solid var(--accent);
+    border-radius: 999px; background: rgba(15,17,21,.92); color: var(--text);
+    font-size: 12px; font-weight: 700; text-align: center; pointer-events: none;
+  }
+  #eyedropBtn.active { background: var(--accent-2); border-color: var(--accent-2); color: #071713; }
   .canvas {
     position: relative; max-width: 90%; max-height: 90%;
   }
   .canvas img {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
     max-width: 70vw; max-height: 72vh; display: none;
-    image-rendering: auto;
+    image-rendering: auto; user-select: none; -webkit-user-select: none; -webkit-user-drag: none;
   }
   .canvas img.on { display: block; }
   .stage .placeholder { color: var(--muted); font-size: 14px; text-align: center; line-height: 1.7; }
@@ -183,6 +192,7 @@
       <label class="check" title="Background used behind transparent frames (also for export)">BG
         <input type="color" id="bgColor" value="#000000" style="width:30px;height:26px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);cursor:pointer;" />
       </label>
+      <button class="btn" id="eyedropBtn" title="Pick the background color from a visible image pixel">⌖ Pick</button>
       <button class="btn" id="stopBtn">⏹ Stop</button>
       <button class="btn primary" id="playBtn">▶ Play</button>
       <button class="btn" id="exportBtn">⤓ Export MP4</button>
@@ -206,7 +216,7 @@
     </aside>
 
     <div class="stage-wrap">
-      <div class="stage">
+      <div class="stage" id="stage">
         <div class="canvas" id="canvas">
           <div class="placeholder" id="stagePlaceholder">
             <b>Stage</b><br />Your layers stack here, pinned to the same center.<br />
@@ -236,6 +246,7 @@
   let playhead = 0;         // seconds
   let lastTs = 0;
   let uid = 1;
+  let pickingColor = false;
 
   const el = {
     fileInput: document.getElementById("fileInput"),
@@ -244,6 +255,7 @@
     layers: document.getElementById("layers"),
     emptyMsg: document.getElementById("emptyMsg"),
     canvas: document.getElementById("canvas"),
+    stage: document.getElementById("stage"),
     stagePlaceholder: document.getElementById("stagePlaceholder"),
     playBtn: document.getElementById("playBtn"),
     stopBtn: document.getElementById("stopBtn"),
@@ -255,6 +267,7 @@
     scrub: document.getElementById("scrub"),
     frameBadge: document.getElementById("frameBadge"),
     bgColor: document.getElementById("bgColor"),
+    eyedropBtn: document.getElementById("eyedropBtn"),
     exportBtn: document.getElementById("exportBtn"),
   };
 
@@ -514,7 +527,16 @@
   el.playBtn.addEventListener("click", () => { playing ? pause() : play(); });
   el.stopBtn.addEventListener("click", stop);
   el.bgColor.addEventListener("input", () => {
-    document.querySelector(".stage").style.background = el.bgColor.value;
+    setBackgroundColor(el.bgColor.value);
+  });
+  el.eyedropBtn.addEventListener("click", () => setPickingColor(!pickingColor));
+  el.stage.addEventListener("pointerdown", e => {
+    if (!pickingColor) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const color = sampleStageColor(e.clientX, e.clientY);
+    setBackgroundColor(color);
+    setPickingColor(false);
   });
   el.exportBtn.addEventListener("click", exportVideo);
   el.scrub.addEventListener("input", e => {
@@ -523,11 +545,67 @@
     renderStage();
   });
   document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && pickingColor) {
+      setPickingColor(false);
+      return;
+    }
     if (e.code === "Space" && e.target.tagName !== "INPUT") {
       e.preventDefault();
       playing ? pause() : play();
     }
   });
+
+  // ---------- Background eyedropper ----------
+  function setPickingColor(on) {
+    pickingColor = on;
+    el.stage.classList.toggle("picking-color", on);
+    el.eyedropBtn.classList.toggle("active", on);
+    el.eyedropBtn.textContent = on ? "✕ Cancel pick" : "⌖ Pick";
+  }
+
+  function setBackgroundColor(hex) {
+    el.bgColor.value = hex;
+    el.stage.style.background = hex;
+  }
+
+  function sampleStageColor(clientX, clientY) {
+    const bg = hexToRgb(el.bgColor.value);
+    let out = { r: bg.r, g: bg.g, b: bg.b };
+    const sampleCanvas = document.createElement("canvas");
+    sampleCanvas.width = 1; sampleCanvas.height = 1;
+    const ctx = sampleCanvas.getContext("2d", { willReadFrequently: true });
+
+    // DOM/layer order is bottom → top. Blend every visible pixel over the BG.
+    layers.forEach((layer, i) => {
+      const img = layer.img;
+      if (!img || !img.naturalWidth || !layerVisibleAt(layer, i, playhead)) return;
+      const r = img.getBoundingClientRect();
+      if (!r.width || !r.height || clientX < r.left || clientX >= r.right || clientY < r.top || clientY >= r.bottom) return;
+      const sx = Math.max(0, Math.min(img.naturalWidth - 1, Math.floor((clientX - r.left) * img.naturalWidth / r.width)));
+      const sy = Math.max(0, Math.min(img.naturalHeight - 1, Math.floor((clientY - r.top) * img.naturalHeight / r.height)));
+      try {
+        ctx.clearRect(0, 0, 1, 1);
+        ctx.drawImage(img, sx, sy, 1, 1, 0, 0, 1, 1);
+        const p = ctx.getImageData(0, 0, 1, 1).data;
+        const a = p[3] / 255;
+        out.r = Math.round(p[0] * a + out.r * (1 - a));
+        out.g = Math.round(p[1] * a + out.g * (1 - a));
+        out.b = Math.round(p[2] * a + out.b * (1 - a));
+      } catch (err) {
+        console.warn("Could not sample this image pixel", err);
+      }
+    });
+    return rgbToHex(out.r, out.g, out.b);
+  }
+
+  function hexToRgb(hex) {
+    const n = parseInt(String(hex).replace("#", ""), 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  function rgbToHex(r, g, b) {
+    return "#" + [r, g, b].map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("");
+  }
 
   // ---------- MP4 / video export ----------
   function pickMime() {

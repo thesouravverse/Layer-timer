@@ -552,14 +552,18 @@
   el.overlay.addEventListener("pointerup", (e) => {
     if (activePointer !== null && e.pointerId !== activePointer) return;
     activePointer = null;
-    // double-tap on a grid line adds a dot (works for mouse, touch & Apple Pencil)
+    // double-tap on a grid line adds a dot (works for mouse, touch & Apple Pencil).
+    // Thresholds are scaled to the screen (sc), and it falls back to the selected line.
     if (mode === "grid" && baseImage) {
       const up = toImageCoords(e);
-      const isTap = Math.hypot(up.x - downX, up.y - downY) < 8 && (performance.now() - downT) < 300;
+      const sc = ovScale();
+      const isTap = Math.hypot(up.x - downX, up.y - downY) < sc * 16 && (performance.now() - downT) < 450;
       if (isTap) {
         const now = performance.now();
-        if (now - lastTapT < 350 && Math.hypot(up.x - lastTapX, up.y - lastTapY) < 26) {
-          const hl = hitLine(up, ovScale() * 10, 14);
+        const isDouble = (now - lastTapT < 500) && Math.hypot(up.x - lastTapX, up.y - lastTapY) < sc * 44;
+        if (isDouble) {
+          let hl = hitLine(up, sc * 20, 14);
+          if (!hl && selLine) hl = selLine;      // slightly off the line? use the selected line
           if (hl) {
             selLine = hl;
             insertDotAt((hl.axis === "v" ? vlines : hlines)[hl.idx], hl.axis, up);

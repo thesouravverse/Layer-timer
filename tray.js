@@ -104,8 +104,8 @@
 
   const overrideCss = `
   html,body{overscroll-behavior:none;touch-action:manipulation}
-  .tray-panel{width:min(720px,62vw);max-width:100vw}
-  @media (max-width:820px){ .tray-panel{width:100vw;max-width:100vw} }
+  .tray-panel{width:320px;max-width:44vw}
+  @media (max-width:600px){ .tray-panel{width:78vw;max-width:78vw} }
   .tray-actions{padding:10px 12px 6px}
   .tray-sel{display:flex;align-items:center;gap:8px;padding:0 12px 10px;border-bottom:1px solid #2a3040;color:#8b93a7;font-size:12px}
   .tray-sel label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}

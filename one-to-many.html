@@ -63,6 +63,29 @@
     border-radius: 6px; padding: 6px 7px; font-size: 13px;
   }
 
+  .source-shelf {
+    flex: 0 0 auto; min-height: 76px; padding: 7px 10px; background: var(--panel);
+    border-bottom: 1px solid var(--line); display: none; align-items: center; gap: 9px;
+  }
+  .source-shelf.on { display: flex; }
+  .source-title { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+  .source-list {
+    flex: 1; min-width: 0; display: flex; gap: 8px; overflow-x: auto; overflow-y: hidden;
+    padding: 2px 2px 5px; touch-action: pan-x; -webkit-overflow-scrolling: touch;
+  }
+  .source-card {
+    position: relative; flex: 0 0 104px; height: 58px; border: 1px solid var(--line);
+    background: var(--panel-2); border-radius: 9px; padding: 4px; cursor: pointer;
+    display: grid; grid-template-rows: 36px 13px; gap: 1px;
+  }
+  .source-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .source-card img { width: 100%; height: 36px; object-fit: contain; display: block; border-radius: 5px;
+    background: linear-gradient(45deg,#20242e 25%,transparent 25%,transparent 75%,#20242e 75%),linear-gradient(45deg,#20242e 25%,#171a21 25%,#171a21 75%,#20242e 75%);
+    background-size: 12px 12px; background-position: 0 0,6px 6px; }
+  .source-card .sn { color: var(--muted); font-size: 9px; line-height: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .source-card .sx { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; padding: 0; border-radius: 50%;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+
   main { flex: 1; display: flex; min-height: 0; }
 
   .editor {
@@ -98,7 +121,7 @@
   .res-head { padding: 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
   .res-head .count { font-size: 13px; color: var(--muted); }
   .res-head .count b { color: var(--text); }
-  .res-actions { display: flex; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .res-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
   .res-actions .btn { flex: 1; justify-content: center; }
   .results { flex: 1; overflow-y: auto; padding: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; }
   .empty { grid-column: 1 / -1; color: var(--muted); text-align: center; padding: 30px 16px; font-size: 13px; line-height: 1.6; }
@@ -116,6 +139,8 @@
   .piece .pv img { max-width: 100%; max-height: 100%; }
   .piece .prow { display: flex; gap: 4px; padding: 6px; }
   .piece .prow .btn { flex: 1; padding: 5px; font-size: 11px; justify-content: center; }
+  .piece .detail-row { padding: 6px 6px 0; }
+  .piece .detail-row .btn { width: 100%; justify-content: center; }
 
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 6px; }
@@ -154,12 +179,17 @@
     <div class="spacer"></div>
 
     <label style="display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:12px;cursor:pointer;" title="Ignore finger/palm touches; draw only with Apple Pencil"><input type="checkbox" id="penOnly" /> ✎ Pencil only</label>
-    <input type="file" id="fileInput" accept="image/*" hidden />
-    <button class="btn" id="uploadBtn">＋ Upload image</button>
+    <input type="file" id="fileInput" accept="image/*" multiple hidden />
+    <button class="btn" id="uploadBtn">＋ Add images</button>
       <button class="btn ghost" id="undoBtn" title="Remove last drawn shape / grid line">↶ Undo</button>
       <button class="btn ghost" id="clearShapesBtn">Clear shapes</button>
       <button class="btn primary" id="cutBtn">✂ Cut all</button>
   </header>
+
+  <div class="source-shelf" id="sourceShelf">
+    <span class="source-title">Sources <b id="sourceCount">0</b></span>
+    <div class="source-list" id="sourceList"></div>
+  </div>
 
   <main>
     <div class="editor">
@@ -188,6 +218,7 @@
       <div class="res-actions">
         <button class="btn" id="downloadAllBtn">⤓ Download all (.zip)</button>
         <button class="btn" id="trayAllBtn">🗂 All → Tray</button>
+        <button class="btn" id="sourcesAllBtn">✂ All → Sources</button>
         <button class="btn ghost" id="clearResultsBtn">Clear</button>
       </div>
       <div class="results" id="results">
@@ -199,7 +230,7 @@
   <button class="btn primary reopen-pieces" id="reopenResults">🧩 Pieces (<span id="reopenCount">0</span>)</button>
   <button class="btn primary fab-cut" id="fabCut">✂ Cut all</button>
 
-<script src="tray.js?v=20260809-full-image-1"></script>
+<script src="tray.js?v=20260809-side-workspace-2"></script>
 <script>
 (() => {
   "use strict";
@@ -212,10 +243,13 @@
   let hlines = [];           // horizontal cut lines: {id, curved, pts:[{x,y}...]} ordered by x (ends x=0,W)
   let lineId = 1;
   let selLine = null;        // {axis:'v'|'h', idx} currently-selected line
-  let pieces = [];           // {name, canvas}
+  let sources = [];          // independent editable images, each preserving its own cut setup
+  let sourceId = 1;
+  let activeSourceId = null;
+  let pieces = [];           // {name, canvas, parentSourceId, editSourceId?}
   let pieceId = 1;
   let shapeId = 1;           // unique id per drawn shape
-  const cutIds = new Set();  // ids already cut -> prevents duplicates
+  let cutIds = new Set();    // per-source ids already cut -> prevents duplicates
 
   // interaction state
   let drawing = false;
@@ -232,6 +266,9 @@
   const el = {
     fileInput: document.getElementById("fileInput"),
     uploadBtn: document.getElementById("uploadBtn"),
+    sourceShelf: document.getElementById("sourceShelf"),
+    sourceList: document.getElementById("sourceList"),
+    sourceCount: document.getElementById("sourceCount"),
     modeToggle: document.getElementById("modeToggle"),
     gridControls: document.getElementById("gridControls"),
     rows: document.getElementById("rows"),
@@ -257,6 +294,7 @@
     pieceCount: document.getElementById("pieceCount"),
     downloadAllBtn: document.getElementById("downloadAllBtn"),
     trayAllBtn: document.getElementById("trayAllBtn"),
+    sourcesAllBtn: document.getElementById("sourcesAllBtn"),
     clearResultsBtn: document.getElementById("clearResultsBtn"),
     collapseResults: document.getElementById("collapseResults"),
     reopenResults: document.getElementById("reopenResults"),
@@ -272,37 +310,104 @@
     lasso: "Lasso mode: press and drag to trace around a shape, release to close it. Trace each animal, then Cut all.",
   };
 
-  // ---------- Upload ----------
+  // ---------- Multi-image source workspace ----------
   el.uploadBtn.addEventListener("click", () => el.fileInput.click());
-  el.fileInput.addEventListener("change", e => {
-    const f = e.target.files[0];
-    if (!f || !f.type.startsWith("image/")) return;
-    setBase(URL.createObjectURL(f));
+  el.fileInput.addEventListener("change", async e => {
+    const files = [...e.target.files].filter(f => f.type.startsWith("image/"));
+    let first = null;
+    for (const f of files) {
+      const src = await addSourceBlob(f, f.name, false);
+      if (!first) first = src;
+    }
+    if (first) activateSource(first.id);
     el.fileInput.value = "";
   });
 
-  function setBase(url) {
-    const img = new Image();
-    img.onload = () => {
-      baseImage = img;
-      el.base.width = img.naturalWidth;
-      el.base.height = img.naturalHeight;
-      el.overlay.width = img.naturalWidth;
-      el.overlay.height = img.naturalHeight;
-      el.base.getContext("2d").drawImage(img, 0, 0);
-      el.holder.style.display = "block";
-      el.placeholder.style.display = "none";
-      rects = []; lassos = []; vlines = []; hlines = []; selLine = null; cutIds.clear();
-      redrawOverlay();
-      setHint();
-    };
-    img.src = url;
+  function addSourceBlob(blob, name, activate = true) {
+    const url = URL.createObjectURL(blob);
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const src = {
+          id: sourceId++, name: name || `source-${sourceId}.png`, url, img,
+          rects: [], lassos: [], vlines: [], hlines: [], selLine: null, cutIds: new Set(),
+        };
+        sources.push(src);
+        renderSources();
+        if (activate) activateSource(src.id);
+        resolve(src);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not read image")); };
+      img.src = url;
+    });
+  }
+
+  function saveActiveSource() {
+    const src = sources.find(s => s.id === activeSourceId);
+    if (!src) return;
+    Object.assign(src, { rects, lassos, vlines, hlines, selLine, cutIds });
+  }
+
+  function activateSource(id) {
+    if (id === activeSourceId && baseImage) return;
+    saveActiveSource();
+    const src = sources.find(s => s.id === id);
+    if (!src) return;
+    activeSourceId = src.id;
+    baseImage = src.img;
+    rects = src.rects; lassos = src.lassos; vlines = src.vlines; hlines = src.hlines;
+    selLine = src.selLine; cutIds = src.cutIds;
+    el.base.width = baseImage.naturalWidth; el.base.height = baseImage.naturalHeight;
+    el.overlay.width = baseImage.naturalWidth; el.overlay.height = baseImage.naturalHeight;
+    el.base.getContext("2d").drawImage(baseImage, 0, 0);
+    el.holder.style.display = "block";
+    el.placeholder.style.display = "none";
+    renderSources(); redrawOverlay(); setHint();
+  }
+
+  function clearActiveCanvas() {
+    activeSourceId = null; baseImage = null;
+    rects = []; lassos = []; vlines = []; hlines = []; selLine = null; cutIds = new Set();
+    el.holder.style.display = "none"; el.placeholder.style.display = "block";
+    octx.clearRect(0, 0, el.overlay.width, el.overlay.height);
+    setHint();
+  }
+
+  function removeSource(id) {
+    const index = sources.findIndex(s => s.id === id);
+    if (index < 0) return;
+    const wasActive = id === activeSourceId;
+    const [src] = sources.splice(index, 1);
+    URL.revokeObjectURL(src.url);
+    if (wasActive) {
+      activeSourceId = null;
+      if (sources.length) activateSource(sources[Math.min(index, sources.length - 1)].id);
+      else clearActiveCanvas();
+    }
+    renderSources();
+  }
+
+  function renderSources() {
+    el.sourceShelf.classList.toggle("on", sources.length > 0);
+    el.sourceCount.textContent = sources.length;
+    el.sourceList.innerHTML = "";
+    sources.forEach(src => {
+      const card = document.createElement("div");
+      card.className = "source-card" + (src.id === activeSourceId ? " active" : "");
+      card.title = src.name;
+      const img = document.createElement("img"); img.src = src.url; img.alt = "";
+      const name = document.createElement("div"); name.className = "sn"; name.textContent = src.name;
+      const remove = document.createElement("button"); remove.className = "sx"; remove.textContent = "×"; remove.title = "Remove source";
+      remove.addEventListener("click", e => { e.stopPropagation(); removeSource(src.id); });
+      card.addEventListener("click", () => activateSource(src.id));
+      card.append(img, name, remove); el.sourceList.appendChild(card);
+    });
   }
 
   // Receive an image from the Tray (e.g. a cutout from Bg Remover)
   window.TRAY_USE_LABEL = "Use as source";
-  window.TRAY_IMPORT = (blob, name) => {
-    setBase(URL.createObjectURL(blob));
+  window.TRAY_IMPORT = async (blob, name) => {
+    await addSourceBlob(blob, name || "tray-image.png", true);
     if (window.TrayUI) window.TrayUI.close();
   };
 
@@ -654,7 +759,9 @@
   el.cutBtn.addEventListener("click", cutAll);
 
   function addPiece(canvas) {
-    pieces.push({ name: `piece-${String(pieceId).padStart(3, "0")}.png`, canvas });
+    const src = sources.find(s => s.id === activeSourceId);
+    const stem = String(src?.name || "image").replace(/\.[^.]+$/, "").replace(/[^a-z0-9_-]+/gi, "-").slice(0, 32);
+    pieces.push({ name: `${stem}-piece-${String(pieceId).padStart(3, "0")}.png`, canvas, parentSourceId: activeSourceId });
     pieceId++;
   }
 
@@ -742,6 +849,7 @@
   });
   el.clearShapesBtn.addEventListener("click", () => {
     rects = []; lassos = []; vlines = []; hlines = []; selLine = null; cutIds.clear();
+    saveActiveSource();
     redrawOverlay();
   });
 
@@ -757,6 +865,7 @@
       const url = pc.canvas.toDataURL("image/png");
       div.innerHTML = `
         <div class="pv"><img src="${url}" /></div>
+        <div class="detail-row"><button class="btn detail">✂ Cut again</button></div>
         <div class="prow">
           <button class="btn dl">⤓ Save</button>
           <button class="btn tray" title="Send to Tray">🗂</button>
@@ -764,6 +873,7 @@
         </div>`;
       div.querySelector(".dl").addEventListener("click", () => downloadCanvas(pc));
       div.querySelector(".tray").addEventListener("click", () => window.Tray.addCanvas(pc.canvas, pc.name));
+      div.querySelector(".detail").addEventListener("click", () => pieceToSource(pc, true));
       div.querySelector(".rm").addEventListener("click", () => { pieces.splice(i, 1); renderResults(); });
       el.results.appendChild(div);
     });
@@ -787,6 +897,31 @@
   el.collapseResults.addEventListener("click", () => document.body.classList.add("results-collapsed"));
   el.reopenResults.addEventListener("click", () => document.body.classList.remove("results-collapsed"));
   el.fabCut.addEventListener("click", cutAll);
+
+  function pieceToSource(pc, activate = true) {
+    if (pc.editSourceId && sources.some(s => s.id === pc.editSourceId)) {
+      if (activate) { activateSource(pc.editSourceId); document.body.classList.add("results-collapsed"); }
+      return Promise.resolve(sources.find(s => s.id === pc.editSourceId));
+    }
+    return new Promise(resolve => pc.canvas.toBlob(async blob => {
+      const src = await addSourceBlob(blob, pc.name.replace(/\.png$/i, "-detail.png"), activate);
+      pc.editSourceId = src.id;
+      if (activate) document.body.classList.add("results-collapsed");
+      renderResults(); resolve(src);
+    }, "image/png"));
+  }
+
+  el.sourcesAllBtn.addEventListener("click", async () => {
+    if (!pieces.length) { alert("Nothing to add yet."); return; }
+    el.sourcesAllBtn.disabled = true;
+    let first = null;
+    for (const pc of pieces) {
+      const src = await pieceToSource(pc, false);
+      if (!first) first = src;
+    }
+    el.sourcesAllBtn.disabled = false;
+    if (first) { activateSource(first.id); document.body.classList.add("results-collapsed"); }
+  });
 
   el.trayAllBtn.addEventListener("click", async () => {
     if (!pieces.length) { alert("Nothing to send yet."); return; }

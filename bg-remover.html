@@ -60,6 +60,7 @@
     <button class="btn primary" id="removeBtn" disabled>✨ Remove background</button>
     <button class="btn" id="downloadBtn" disabled>⤓ Download PNG</button>
     <button class="btn" id="sendTrayBtn" disabled>🗂 Send to Tray</button>
+    <button class="btn" id="updateTrayBtn" disabled title="Overwrite the Tray item you loaded from">♻ Update in Tray</button>
   </header>
 
   <main>
@@ -93,6 +94,7 @@
       removeBtn: document.getElementById("removeBtn"),
       downloadBtn: document.getElementById("downloadBtn"),
       sendTrayBtn: document.getElementById("sendTrayBtn"),
+      updateTrayBtn: document.getElementById("updateTrayBtn"),
       holder: document.getElementById("holder"),
       stageImg: document.getElementById("stageImg"),
       placeholder: document.getElementById("placeholder"),
@@ -103,6 +105,7 @@
     let sourceBlob = null;   // original
     let resultBlob = null;   // cut-out
     let baseName = "image";
+    let srcTrayId = null;    // id of the Tray item this source came from (for in-place update)
 
     function setStatus(msg, cls) {
       el.statusText.textContent = msg;
@@ -122,6 +125,7 @@
       el.removeBtn.disabled = false;
       el.downloadBtn.disabled = false;   // can download original too
       el.sendTrayBtn.disabled = false;
+      el.updateTrayBtn.disabled = true;  // enabled after an edit, only if from Tray
       setStatus("Image loaded. Press “Remove background”.", "");
     }
 
@@ -129,6 +133,7 @@
     el.fileInput.addEventListener("change", e => {
       const f = e.target.files[0];
       if (!f || !f.type.startsWith("image/")) return;
+      srcTrayId = null;
       loadSource(f, f.name);
       el.fileInput.value = "";
     });
@@ -148,6 +153,7 @@
         });
         resultBlob = blob;
         showImage(blob);
+        el.updateTrayBtn.disabled = srcTrayId == null;
         setStatus("Done ✓ background removed. Download or send to Tray.", "done");
       } catch (err) {
         console.error(err);
@@ -172,11 +178,22 @@
       if (!blob) return;
       await window.Tray.add(blob, resultBlob ? `${baseName}-nobg.png` : `${baseName}.png`);
       setStatus("Sent to Tray 🗂 — open it on any page to reuse.", "done");
+      if (window.TrayUI) window.TrayUI.refresh();
+    });
+
+    el.updateTrayBtn.addEventListener("click", async () => {
+      if (srcTrayId == null) return;
+      const blob = resultBlob || sourceBlob;
+      if (!blob) return;
+      await window.Tray.update(srcTrayId, blob, resultBlob ? `${baseName}-nobg.png` : `${baseName}.png`);
+      setStatus("Updated that Tray item ♻ — same slot, new image.", "done");
+      if (window.TrayUI) window.TrayUI.refresh();
     });
 
     // Receive an image from the Tray (sent from another page)
     window.TRAY_USE_LABEL = "Use as source";
-    window.TRAY_IMPORT = (blob, name) => {
+    window.TRAY_IMPORT = (blob, name, id) => {
+      srcTrayId = id != null ? id : null;
       loadSource(blob, name);
       if (window.TrayUI) window.TrayUI.close();
     };

@@ -119,17 +119,21 @@
     </div>
 
     <span class="field-inline" id="gridControls">
-      Rows <input type="number" id="rows" min="1" max="50" value="2" />
-      Cols <input type="number" id="cols" min="1" max="50" value="2" />
+      Rows <input type="number" id="rows" min="1" max="100" value="3" />
+      Cols <input type="number" id="cols" min="1" max="100" value="3" />
+      <button class="btn ghost" id="genGrid" title="Create an evenly spaced grid you can then drag">Even grid</button>
+      <button class="btn ghost" id="addV" title="Add a vertical line">＋ V</button>
+      <button class="btn ghost" id="addH" title="Add a horizontal line">＋ H</button>
+      <button class="btn ghost" id="clearGrid" title="Remove all grid lines">Clear grid</button>
     </span>
 
     <div class="spacer"></div>
 
     <input type="file" id="fileInput" accept="image/*" hidden />
     <button class="btn" id="uploadBtn">＋ Upload image</button>
-    <button class="btn ghost" id="undoBtn" title="Remove last drawn shape">↶ Undo</button>
-    <button class="btn ghost" id="clearShapesBtn">Clear cuts</button>
-    <button class="btn primary" id="cutBtn">✂ Cut</button>
+      <button class="btn ghost" id="undoBtn" title="Remove last drawn shape / grid line">↶ Undo</button>
+      <button class="btn ghost" id="clearShapesBtn">Clear shapes</button>
+      <button class="btn primary" id="cutBtn">✂ Cut all</button>
   </header>
 
   <main>
@@ -142,7 +146,7 @@
         <div class="placeholder" id="placeholder">
           <b>Upload an image to begin.</b><br />
           Then pick a mode:<br />
-          <b>Grid</b> — split into rows × cols.<br />
+          <b>Grid</b> — add & drag custom lines (any spacing).<br />
           <b>Rectangles</b> — drag boxes around each piece.<br />
           <b>Lasso</b> — trace freehand around each shape (like cutting paper animals).
         </div>
@@ -170,16 +174,21 @@
 
   let baseImage = null;      // Image object
   let mode = "grid";
-  let rects = [];            // {x,y,w,h} in image pixels
-  let lassos = [];           // array of arrays of {x,y}
+  let rects = [];            // {id, x, y, w, h, cut}
+  let lassos = [];           // {id, pts:[{x,y}], cut}
+  let vLines = [];           // interior vertical line x-positions (image px)
+  let hLines = [];           // interior horizontal line y-positions (image px)
   let pieces = [];           // {name, canvas}
   let pieceId = 1;
+  let shapeId = 1;           // unique id per drawn shape
+  const cutIds = new Set();  // ids already cut -> prevents duplicates
 
   // interaction state
   let drawing = false;
   let startPt = null;
   let curRect = null;
   let curPath = null;
+  let dragLine = null;       // {axis:'v'|'h', index} while dragging a grid line
 
   const el = {
     fileInput: document.getElementById("fileInput"),
@@ -188,6 +197,10 @@
     gridControls: document.getElementById("gridControls"),
     rows: document.getElementById("rows"),
     cols: document.getElementById("cols"),
+    genGrid: document.getElementById("genGrid"),
+    addV: document.getElementById("addV"),
+    addH: document.getElementById("addH"),
+    clearGrid: document.getElementById("clearGrid"),
     holder: document.getElementById("holder"),
     base: document.getElementById("base"),
     overlay: document.getElementById("overlay"),
@@ -205,9 +218,9 @@
   const octx = el.overlay.getContext("2d");
 
   const HINTS = {
-    grid: "Grid mode: set Rows × Cols, then press Cut. The image splits into equal cells.",
-    rect: "Rectangles mode: click-drag to draw a box around each piece. Draw as many as you want, then Cut.",
-    lasso: "Lasso mode: press and drag to trace around a shape, release to close it. Trace each animal, then Cut.",
+    grid: "Grid mode: click 'Even grid' or ＋V / ＋H to add lines. Drag any line to move it, double-click a line to delete. Then Cut all.",
+    rect: "Rectangles mode: click-drag to draw a box around each piece. Draw as many as you want, then Cut all.",
+    lasso: "Lasso mode: press and drag to trace around a shape, release to close it. Trace each animal, then Cut all.",
   };
 
   // ---------- Upload ----------
@@ -226,7 +239,7 @@
       el.base.getContext("2d").drawImage(img, 0, 0);
       el.holder.style.display = "block";
       el.placeholder.style.display = "none";
-      rects = []; lassos = [];
+      rects = []; lassos = []; vLines = []; hLines = []; cutIds.clear();
       redrawOverlay();
       setHint();
     };
@@ -241,6 +254,7 @@
     mode = btn.dataset.mode;
     [...el.modeToggle.children].forEach(b => b.classList.toggle("active", b === btn));
     el.gridControls.style.display = mode === "grid" ? "inline-flex" : "none";
+    el.overlay.style.cursor = mode === "grid" ? "default" : "crosshair";
     setHint();
     redrawOverlay();
   });
@@ -251,7 +265,32 @@
       : "Upload an image to start.";
   }
 
-  [el.rows, el.cols].forEach(inp => inp.addEventListener("input", redrawOverlay));
+  el.genGrid.addEventListener("click", generateEvenGrid);
+  el.addV.addEventListener("click", () => { if (!baseImage) return; vLines.push(largestGapMid(vLines, baseImage.naturalWidth)); redrawOverlay(); });
+  el.addH.addEventListener("click", () => { if (!baseImage) return; hLines.push(largestGapMid(hLines, baseImage.naturalHeight)); redrawOverlay(); });
+  el.clearGrid.addEventListener("click", () => { vLines = []; hLines = []; redrawOverlay(); });
+
+  function generateEvenGrid() {
+    if (!baseImage) { alert("Upload an image first."); return; }
+    const rows = clampInt(el.rows.value, 1, 100), cols = clampInt(el.cols.value, 1, 100);
+    const W = baseImage.naturalWidth, H = baseImage.naturalHeight;
+    vLines = []; for (let c = 1; c < cols; c++) vLines.push(c * W / cols);
+    hLines = []; for (let r = 1; r < rows; r++) hLines.push(r * H / rows);
+    redrawOverlay();
+  }
+  function largestGapMid(positions, max) {
+    const b = [0, ...positions.slice().sort((a, b) => a - b), max];
+    let best = -1, mid = max / 2;
+    for (let i = 0; i < b.length - 1; i++) { const g = b[i + 1] - b[i]; if (g > best) { best = g; mid = (b[i] + b[i + 1]) / 2; } }
+    return mid;
+  }
+  function hitTestLine(p) {
+    const scale = el.overlay.width / (el.overlay.getBoundingClientRect().width || el.overlay.width);
+    const th = scale * 8;
+    for (let i = 0; i < vLines.length; i++) if (Math.abs(p.x - vLines[i]) < th) return { axis: "v", index: i };
+    for (let i = 0; i < hLines.length; i++) if (Math.abs(p.y - hLines[i]) < th) return { axis: "h", index: i };
+    return null;
+  }
 
   // ---------- Coordinate mapping ----------
   function toImageCoords(evt) {
@@ -266,7 +305,12 @@
 
   // ---------- Drawing interaction ----------
   el.overlay.addEventListener("pointerdown", e => {
-    if (!baseImage || mode === "grid") return;
+    if (!baseImage) return;
+    if (mode === "grid") {
+      const hit = hitTestLine(toImageCoords(e));
+      if (hit) { dragLine = hit; el.overlay.setPointerCapture(e.pointerId); }
+      return;
+    }
     el.overlay.setPointerCapture(e.pointerId);
     drawing = true;
     startPt = toImageCoords(e);
@@ -274,6 +318,17 @@
     else curPath = [startPt];
   });
   el.overlay.addEventListener("pointermove", e => {
+    if (mode === "grid") {
+      if (dragLine) {
+        const p = toImageCoords(e);
+        if (dragLine.axis === "v") vLines[dragLine.index] = Math.max(1, Math.min(el.overlay.width - 1, p.x));
+        else hLines[dragLine.index] = Math.max(1, Math.min(el.overlay.height - 1, p.y));
+        redrawOverlay();
+      } else {
+        el.overlay.style.cursor = hitTestLine(toImageCoords(e)) ? "move" : "default";
+      }
+      return;
+    }
     if (!drawing) return;
     const p = toImageCoords(e);
     if (mode === "rect") {
@@ -286,100 +341,136 @@
     redrawOverlay();
   });
   el.overlay.addEventListener("pointerup", () => {
+    if (dragLine) { dragLine = null; return; }
     if (!drawing) return;
     drawing = false;
-    if (mode === "rect" && curRect && curRect.w > 4 && curRect.h > 4) rects.push(curRect);
-    if (mode === "lasso" && curPath && curPath.length >= 3) lassos.push(curPath);
+    if (mode === "rect" && curRect && curRect.w > 4 && curRect.h > 4)
+      rects.push({ id: shapeId++, x: curRect.x, y: curRect.y, w: curRect.w, h: curRect.h, cut: false });
+    if (mode === "lasso" && curPath && curPath.length >= 3)
+      lassos.push({ id: shapeId++, pts: curPath, cut: false });
     curRect = null; curPath = null;
     redrawOverlay();
+  });
+  el.overlay.addEventListener("dblclick", e => {
+    if (mode !== "grid" || !baseImage) return;
+    const hit = hitTestLine(toImageCoords(e));
+    if (hit) { (hit.axis === "v" ? vLines : hLines).splice(hit.index, 1); redrawOverlay(); }
   });
 
   // ---------- Overlay rendering ----------
   function redrawOverlay() {
     octx.clearRect(0, 0, el.overlay.width, el.overlay.height);
+    if (!baseImage) return;
     const scale = el.overlay.width / (el.overlay.getBoundingClientRect().width || el.overlay.width);
     const lw = Math.max(1, scale * 1.5);
 
-    if (mode === "grid" && baseImage) {
-      const rows = clampInt(el.rows.value, 1, 50);
-      const cols = clampInt(el.cols.value, 1, 50);
-      octx.strokeStyle = "rgba(91,140,255,0.9)";
+    if (mode === "grid") {
+      octx.strokeStyle = "rgba(91,140,255,0.95)";
       octx.lineWidth = lw;
-      const cw = el.overlay.width / cols, ch = el.overlay.height / rows;
-      for (let c = 1; c < cols; c++) line(c * cw, 0, c * cw, el.overlay.height);
-      for (let r = 1; r < rows; r++) line(0, r * ch, el.overlay.width, r * ch);
+      vLines.forEach(x => line(x, 0, x, el.overlay.height));
+      hLines.forEach(y => line(0, y, el.overlay.width, y));
       octx.strokeRect(lw / 2, lw / 2, el.overlay.width - lw, el.overlay.height - lw);
+      // draggable handles
+      octx.fillStyle = "rgba(91,140,255,0.95)";
+      const hs = Math.max(4, scale * 5);
+      vLines.forEach(x => octx.fillRect(x - hs, el.overlay.height / 2 - hs, hs * 2, hs * 2));
+      hLines.forEach(y => octx.fillRect(el.overlay.width / 2 - hs, y - hs, hs * 2, hs * 2));
     }
 
-    // rectangles
-    octx.strokeStyle = "rgba(46,195,166,0.95)";
-    octx.fillStyle = "rgba(46,195,166,0.12)";
+    // rectangles (cut ones dimmed)
     octx.lineWidth = lw;
-    rects.forEach(rt => { octx.fillRect(rt.x, rt.y, rt.w, rt.h); octx.strokeRect(rt.x, rt.y, rt.w, rt.h); });
-    if (curRect) { octx.fillRect(curRect.x, curRect.y, curRect.w, curRect.h); octx.strokeRect(curRect.x, curRect.y, curRect.w, curRect.h); }
+    rects.forEach(rt => {
+      const done = rt.cut;
+      octx.strokeStyle = done ? "rgba(139,147,167,0.85)" : "rgba(46,195,166,0.95)";
+      octx.fillStyle = done ? "rgba(139,147,167,0.10)" : "rgba(46,195,166,0.12)";
+      octx.fillRect(rt.x, rt.y, rt.w, rt.h); octx.strokeRect(rt.x, rt.y, rt.w, rt.h);
+    });
+    if (curRect) {
+      octx.strokeStyle = "rgba(46,195,166,0.95)"; octx.fillStyle = "rgba(46,195,166,0.12)";
+      octx.fillRect(curRect.x, curRect.y, curRect.w, curRect.h); octx.strokeRect(curRect.x, curRect.y, curRect.w, curRect.h);
+    }
 
-    // lassos
+    // lassos (cut ones dimmed)
     const drawPath = (pts, close) => {
       octx.beginPath();
       pts.forEach((p, i) => i ? octx.lineTo(p.x, p.y) : octx.moveTo(p.x, p.y));
       if (close) octx.closePath();
       octx.fill(); octx.stroke();
     };
-    octx.strokeStyle = "rgba(255,93,108,0.95)";
-    octx.fillStyle = "rgba(255,93,108,0.14)";
     octx.lineWidth = lw;
-    lassos.forEach(p => drawPath(p, true));
-    if (curPath) drawPath(curPath, false);
+    lassos.forEach(ls => {
+      const done = ls.cut;
+      octx.strokeStyle = done ? "rgba(139,147,167,0.85)" : "rgba(255,93,108,0.95)";
+      octx.fillStyle = done ? "rgba(139,147,167,0.10)" : "rgba(255,93,108,0.14)";
+      drawPath(ls.pts, true);
+    });
+    if (curPath) {
+      octx.strokeStyle = "rgba(255,93,108,0.95)"; octx.fillStyle = "rgba(255,93,108,0.14)";
+      drawPath(curPath, false);
+    }
   }
   function line(x1, y1, x2, y2) { octx.beginPath(); octx.moveTo(x1, y1); octx.lineTo(x2, y2); octx.stroke(); }
   window.addEventListener("resize", redrawOverlay);
 
-  // ---------- Cutting ----------
-  el.cutBtn.addEventListener("click", () => {
-    if (!baseImage) { alert("Upload an image first."); return; }
-    if (mode === "grid") cutGrid();
-    else if (mode === "rect") cutRects();
-    else cutLassos();
-  });
+  // ---------- Cutting (all shapes at once, no duplicates) ----------
+  el.cutBtn.addEventListener("click", cutAll);
 
   function addPiece(canvas) {
     pieces.push({ name: `piece-${String(pieceId).padStart(3, "0")}.png`, canvas });
     pieceId++;
   }
 
-  function cutGrid() {
-    const rows = clampInt(el.rows.value, 1, 50);
-    const cols = clampInt(el.cols.value, 1, 50);
+  function cutAll() {
+    if (!baseImage) { alert("Upload an image first."); return; }
+    let n = 0;
+    n += cutGridCells();
+    n += cutRectShapes();
+    n += cutLassoShapes();
+    if (n === 0) { alert("Nothing new to cut. Add grid lines or draw rectangles / lassos first."); return; }
+    renderResults();
+    redrawOverlay();
+  }
+
+  function cutGridCells() {
+    if (vLines.length === 0 && hLines.length === 0) return 0;
     const W = baseImage.naturalWidth, H = baseImage.naturalHeight;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const x = Math.round(c * W / cols), y = Math.round(r * H / rows);
-        const w = Math.round((c + 1) * W / cols) - x, h = Math.round((r + 1) * H / rows) - y;
+    const xs = [0, ...vLines.slice().sort((a, b) => a - b), W].map(Math.round);
+    const ys = [0, ...hLines.slice().sort((a, b) => a - b), H].map(Math.round);
+    let count = 0;
+    for (let r = 0; r < ys.length - 1; r++) {
+      for (let c = 0; c < xs.length - 1; c++) {
+        const x = xs[c], y = ys[r], w = xs[c + 1] - x, h = ys[r + 1] - y;
+        if (w < 1 || h < 1) continue;
+        const id = `grid:${x}:${y}:${w}:${h}`;
+        if (cutIds.has(id)) continue;      // already cut this exact cell
         const cv = document.createElement("canvas");
         cv.width = w; cv.height = h;
         cv.getContext("2d").drawImage(baseImage, x, y, w, h, 0, 0, w, h);
-        addPiece(cv);
+        addPiece(cv); cutIds.add(id); count++;
       }
     }
-    renderResults();
+    return count;
   }
 
-  function cutRects() {
-    if (!rects.length) { alert("Draw at least one rectangle first."); return; }
+  function cutRectShapes() {
+    let count = 0;
     rects.forEach(rt => {
+      if (rt.cut) return;               // skip already-cut rectangle
       const x = Math.round(rt.x), y = Math.round(rt.y), w = Math.round(rt.w), h = Math.round(rt.h);
       if (w < 1 || h < 1) return;
       const cv = document.createElement("canvas");
       cv.width = w; cv.height = h;
       cv.getContext("2d").drawImage(baseImage, x, y, w, h, 0, 0, w, h);
-      addPiece(cv);
+      addPiece(cv); rt.cut = true; count++;
     });
-    renderResults();
+    return count;
   }
 
-  function cutLassos() {
-    if (!lassos.length) { alert("Trace at least one lasso first."); return; }
-    lassos.forEach(poly => {
+  function cutLassoShapes() {
+    let count = 0;
+    lassos.forEach(ls => {
+      if (ls.cut) return;               // skip already-cut lasso
+      const poly = ls.pts;
       const xs = poly.map(p => p.x), ys = poly.map(p => p.y);
       const minX = Math.floor(Math.min(...xs)), minY = Math.floor(Math.min(...ys));
       const maxX = Math.ceil(Math.max(...xs)), maxY = Math.ceil(Math.max(...ys));
@@ -392,18 +483,22 @@
       ctx.closePath();
       ctx.clip();
       ctx.drawImage(baseImage, -minX, -minY);
-      addPiece(cv);
+      addPiece(cv); ls.cut = true; count++;
     });
-    renderResults();
+    return count;
   }
 
   // ---------- Undo / clear ----------
   el.undoBtn.addEventListener("click", () => {
     if (mode === "rect") rects.pop();
     else if (mode === "lasso") lassos.pop();
+    else if (mode === "grid") { if (hLines.length >= vLines.length) hLines.pop(); else vLines.pop(); }
     redrawOverlay();
   });
-  el.clearShapesBtn.addEventListener("click", () => { rects = []; lassos = []; redrawOverlay(); });
+  el.clearShapesBtn.addEventListener("click", () => {
+    rects = []; lassos = []; vLines = []; hLines = []; cutIds.clear();
+    redrawOverlay();
+  });
 
   // ---------- Results ----------
   function renderResults() {

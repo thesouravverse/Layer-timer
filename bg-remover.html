@@ -57,6 +57,13 @@
     <div class="spacer"></div>
     <input type="file" id="fileInput" accept="image/*" hidden />
     <button class="btn" id="uploadBtn">＋ Upload image</button>
+    <label style="display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;">Quality
+      <select id="qualitySel" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:5px;">
+        <option value="isnet_quint8">Fast (small)</option>
+        <option value="isnet_fp16" selected>Balanced</option>
+        <option value="isnet">Best</option>
+      </select>
+    </label>
     <button class="btn primary" id="removeBtn" disabled>✨ Remove background</button>
     <button class="btn" id="downloadBtn" disabled>⤓ Download PNG</button>
     <button class="btn" id="sendTrayBtn" disabled>🗂 Send to Tray</button>
@@ -92,6 +99,7 @@
       fileInput: document.getElementById("fileInput"),
       uploadBtn: document.getElementById("uploadBtn"),
       removeBtn: document.getElementById("removeBtn"),
+      qualitySel: document.getElementById("qualitySel"),
       downloadBtn: document.getElementById("downloadBtn"),
       sendTrayBtn: document.getElementById("sendTrayBtn"),
       updateTrayBtn: document.getElementById("updateTrayBtn"),
@@ -106,6 +114,21 @@
     let resultBlob = null;   // cut-out
     let baseName = "image";
     let srcTrayId = null;    // id of the Tray item this source came from (for in-place update)
+    const HAS_GPU = typeof navigator !== "undefined" && !!navigator.gpu;
+
+    // Shrink very large inputs so applying/encoding the cutout stays fast.
+    async function downscaleBlob(blob, maxDim) {
+      try {
+        const bmp = await createImageBitmap(blob);
+        const big = Math.max(bmp.width, bmp.height);
+        if (big <= maxDim) { bmp.close && bmp.close(); return blob; }
+        const s = maxDim / big, w = Math.round(bmp.width * s), h = Math.round(bmp.height * s);
+        const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+        cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
+        bmp.close && bmp.close();
+        return await new Promise(r => cv.toBlob(r, "image/png"));
+      } catch { return blob; }
+    }
 
     function setStatus(msg, cls) {
       el.statusText.textContent = msg;
@@ -141,10 +164,16 @@
     el.removeBtn.addEventListener("click", async () => {
       if (!sourceBlob) return;
       el.removeBtn.disabled = true; el.uploadBtn.disabled = true;
-      setStatus("Loading model & processing… first run downloads it once.", "working");
+      setStatus(HAS_GPU ? "Using GPU. Loading model & processing… first run downloads it once (then cached)."
+                        : "Loading model & processing… first run downloads it once (then cached).", "working");
       try {
         const rb = await ensureRemover();
-        const blob = await rb(sourceBlob, {
+        const input = await downscaleBlob(sourceBlob, 2048);
+        const blob = await rb(input, {
+          model: el.qualitySel.value,        // isnet_quint8 (fast) | isnet_fp16 | isnet (best)
+          device: HAS_GPU ? "gpu" : "cpu",   // WebGPU when available = much faster
+          proxyToWorker: true,               // keep the UI responsive
+          output: { format: "image/png" },
           progress: (key, cur, tot) => {
             const pct = tot ? Math.round((cur / tot) * 100) : 0;
             const label = key.startsWith("fetch") ? "Downloading model" : "Processing";

@@ -270,6 +270,7 @@
     style.textContent = `
       .project-button.project-saving::after{content:"";width:7px;height:7px;border-radius:50%;background:#f0b34a;display:inline-block}
       .project-button.project-error::after{content:"!";color:#ff5d6c;font-weight:900}
+      .project-new-button{color:#ff9aa3!important}
       .project-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:11000;display:none;align-items:center;justify-content:center;padding:16px}
       .project-backdrop.open{display:flex}
       .project-dialog{width:min(440px,94vw);background:#171a21;color:#e6e9ef;border:1px solid #2a3040;border-radius:14px;box-shadow:0 24px 70px rgba(0,0,0,.6);font-family:system-ui,"Segoe UI",sans-serif;overflow:hidden}
@@ -288,6 +289,14 @@
     button.textContent = "💾 Project";
     const nav = document.querySelector(".topnav") || document.querySelector("header");
     nav.appendChild(button);
+
+    const newButton = document.createElement("button");
+    newButton.className = "btn project-new-button";
+    newButton.type = "button";
+    newButton.textContent = "＋ New";
+    newButton.title = "Start a new project";
+    newButton.addEventListener("click", newProject);
+    nav.appendChild(newButton);
 
     const backdrop = document.createElement("div");
     backdrop.className = "project-backdrop";

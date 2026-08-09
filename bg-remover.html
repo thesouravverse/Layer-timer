@@ -82,8 +82,8 @@
     <div class="statusbar" id="statusbar"><span class="dot"></span><span id="statusText">Ready. Upload an image to begin.</span></div>
   </main>
 
-  <script src="tray.js?v=20260809-project-3"></script>
-  <script src="project.js?v=20260809-project-3"></script>
+  <script src="tray.js?v=20260809-asset-ids-4"></script>
+  <script src="project.js?v=20260809-asset-ids-4"></script>
   <script>
     // Load the background-removal model lazily so the Tray wiring below is
     // never blocked by the CDN (important on restricted networks).
@@ -115,6 +115,7 @@
     let resultBlob = null;   // cut-out
     let baseName = "image";
     let srcTrayId = null;    // id of the Tray item this source came from (for in-place update)
+    let srcTrayAssetId = null;
     const HAS_GPU = typeof navigator !== "undefined" && !!navigator.gpu;
     let gpuFailed = false;
     let stageUrl = null;
@@ -163,6 +164,7 @@
       const f = e.target.files[0];
       if (!f || !f.type.startsWith("image/")) return;
       srcTrayId = null;
+      srcTrayAssetId = null;
       loadSource(f, f.name);
       el.fileInput.value = "";
     });
@@ -222,7 +224,7 @@
     el.sendTrayBtn.addEventListener("click", async () => {
       const blob = resultBlob || sourceBlob;
       if (!blob) return;
-      await window.Tray.add(blob, resultBlob ? `${baseName}-nobg.png` : `${baseName}.png`);
+      await window.Tray.add(blob, resultBlob ? `${baseName}-nobg.png` : `${baseName}.png`, srcTrayAssetId ? `${srcTrayAssetId}-NOBG` : null);
       setStatus("Sent to Tray 🗂 — open it on any page to reuse.", "done");
       if (window.TrayUI) window.TrayUI.refresh();
       if (window.ProjectStore) window.ProjectStore.markDirty();
@@ -232,7 +234,7 @@
       if (srcTrayId == null) return;
       const blob = resultBlob || sourceBlob;
       if (!blob) return;
-      await window.Tray.update(srcTrayId, blob, resultBlob ? `${baseName}-nobg.png` : `${baseName}.png`);
+      await window.Tray.update(srcTrayId, blob, resultBlob ? `${baseName}-nobg.png` : `${baseName}.png`, srcTrayAssetId);
       setStatus("Updated that Tray item ♻ — same slot, new image.", "done");
       if (window.TrayUI) window.TrayUI.refresh();
       if (window.ProjectStore) window.ProjectStore.markDirty();
@@ -240,8 +242,9 @@
 
     // Receive an image from the Tray (sent from another page)
     window.TRAY_USE_LABEL = "Use as source";
-    window.TRAY_IMPORT = (blob, name, id) => {
+    window.TRAY_IMPORT = (blob, name, id, assetId) => {
       srcTrayId = id != null ? id : null;
+      srcTrayAssetId = assetId || null;
       loadSource(blob, name);
       if (window.TrayUI) window.TrayUI.close();
     };
@@ -254,6 +257,7 @@
         resultBlob,
         baseName,
         srcTrayId,
+        srcTrayAssetId,
         quality: el.qualitySel.value,
       };
     }
@@ -263,6 +267,7 @@
       resultBlob = state.resultBlob || null;
       baseName = state.baseName || "image";
       srcTrayId = state.srcTrayId == null ? null : state.srcTrayId;
+      srcTrayAssetId = state.srcTrayAssetId || null;
       if (["isnet_quint8", "isnet_fp16", "isnet"].includes(state.quality)) el.qualitySel.value = state.quality;
       const display = resultBlob || sourceBlob;
       if (!display) return;

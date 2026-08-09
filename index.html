@@ -77,6 +77,9 @@
   }
   .side-head { padding: 12px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; }
   .side-head .btn { flex: 1; justify-content: center; }
+  .quick-id-row { padding: 9px 12px; border-bottom: 1px solid var(--line); display: flex; gap: 7px; }
+  .quick-id-row input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 7px; padding: 8px; font-size: 12px; text-transform: uppercase; }
+  .quick-id-row input:focus { outline: none; border-color: var(--accent-2); }
 
   .layers { overflow-y: auto; padding: 10px; flex: 1; }
   .empty { color: var(--muted); text-align: center; padding: 40px 20px; font-size: 13px; line-height: 1.6; }
@@ -206,6 +209,10 @@
         <button class="btn ghost" id="clearBtn">Clear all</button>
         <input type="file" id="fileInput" accept="image/*" multiple hidden />
       </div>
+      <div class="quick-id-row">
+        <input id="trayIdInput" placeholder="Tray IDs: CUT-001, CUT-002" aria-label="Tray image IDs" />
+        <button class="btn" id="addIdsBtn" title="Add Tray images by ID">Add IDs</button>
+      </div>
       <div class="layers" id="layers">
         <div class="empty" id="emptyMsg">
           No layers yet.<br />
@@ -234,8 +241,8 @@
 
 <button class="btn primary fab-play" id="fabPlay">▶ Play</button>
 
-<script src="tray.js?v=20260809-project-3"></script>
-<script src="project.js?v=20260809-project-3"></script>
+<script src="tray.js?v=20260809-asset-ids-4"></script>
+<script src="project.js?v=20260809-asset-ids-4"></script>
 <script>
 (() => {
   "use strict";
@@ -253,6 +260,8 @@
     fileInput: document.getElementById("fileInput"),
     addBtn: document.getElementById("addBtn"),
     clearBtn: document.getElementById("clearBtn"),
+    trayIdInput: document.getElementById("trayIdInput"),
+    addIdsBtn: document.getElementById("addIdsBtn"),
     layers: document.getElementById("layers"),
     emptyMsg: document.getElementById("emptyMsg"),
     canvas: document.getElementById("canvas"),
@@ -614,6 +623,7 @@
     const savedLayers = await Promise.all(layers.map(async layer => ({
       id: layer.id,
       name: layer.name,
+      assetId: layer.assetId || null,
       blob: layer.blob || await fetch(layer.url).then(response => response.blob()),
       start: layer.start,
       dur: layer.dur,
@@ -639,6 +649,7 @@
       return {
         id: saved.id,
         name: saved.name || "layer",
+        assetId: saved.assetId || null,
         blob,
         url: URL.createObjectURL(blob),
         img: null,
@@ -786,12 +797,12 @@
   }
 
   // Receive an image from the Tray (from One→Many or Bg Remover)
-  window.TRAY_USE_LABEL = "Add as layer";
-  window.TRAY_IMPORT = (blob, name) => {
+  function addTrayItemAsLayer(blob, name, assetId) {
     const url = URL.createObjectURL(blob);
     layers.push({
       id: uid++,
-      name: (name || "layer").replace(/\.[^.]+$/, ""),
+      name: assetId || (name || "layer").replace(/\.[^.]+$/, ""),
+      assetId: assetId || null,
       blob, url, img: null,
       start: +(layers.length * 0.2).toFixed(2),
       dur: 0.2,
@@ -801,7 +812,26 @@
     renderLayers();
     renderStage();
     if (window.ProjectStore) window.ProjectStore.markDirty();
+  }
+
+  window.TRAY_USE_LABEL = "Add as layer";
+  window.TRAY_IMPORT = (blob, name, trayRecordId, assetId) => {
+    addTrayItemAsLayer(blob, name, assetId);
   };
+
+  el.addIdsBtn.addEventListener("click", async () => {
+    const ids = el.trayIdInput.value.split(/[\s,;]+/).map(value => value.trim()).filter(Boolean);
+    if (!ids.length) { el.trayIdInput.focus(); return; }
+    const found = await window.Tray.findByAssetIds(ids);
+    const missing = [];
+    found.forEach((item, index) => {
+      if (!item) missing.push(ids[index].toUpperCase());
+      else addTrayItemAsLayer(item.blob, item.name, item.assetId);
+    });
+    if (missing.length) alert("Tray IDs not found: " + missing.join(", "));
+    else el.trayIdInput.value = "";
+  });
+  el.trayIdInput.addEventListener("keydown", event => { if (event.key === "Enter") el.addIdsBtn.click(); });
 
   document.getElementById("fabPlay")?.addEventListener("click", () => (playing ? pause() : play()));
 

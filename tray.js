@@ -28,19 +28,26 @@
       rq.onerror = () => rej(rq.error);
     });
   }
+  function rawAll() { return withStore("readonly", store => store.getAll()); }
 
   const Tray = {
-    add(blob, name) { return withStore("readwrite", s => s.add({ name: name || `image-${Date.now()}.png`, blob, ts: Date.now() })).then(id => { updateCount(); notifyProject(); return id; }); },
-    all() { return withStore("readonly", s => s.getAll()); },
+    async add(blob, name, assetId) {
+      const id = await withStore("readwrite", s => s.add({ name: name || `image-${Date.now()}.png`, assetId: "", blob, ts: Date.now() }));
+      const assigned = await uniqueAssetId(assetId || defaultAssetId(id), id);
+      await setRecordAssetId(id, assigned);
+      updateCount(); notifyProject();
+      return id;
+    },
+    all() { return rawAll().then(ensureAssetIds); },
     get(id) { return withStore("readonly", s => s.get(id)); },
     remove(id) { return withStore("readwrite", s => s.delete(id)).then(r => { updateCount(); notifyProject(); return r; }); },
     clear() { return withStore("readwrite", s => s.clear()).then(r => { updateCount(); notifyProject(); return r; }); },
     count() { return withStore("readonly", s => s.count()); },
-    async addCanvas(canvas, name) {
+    async addCanvas(canvas, name, assetId) {
       const blob = await new Promise(r => canvas.toBlob(r, "image/png"));
-      return Tray.add(blob, name);
+      return Tray.add(blob, name, assetId);
     },
-    async update(id, blob, name) {
+    async update(id, blob, name, assetId) {
       const db = await openDB();
       return new Promise((res, rej) => {
         const st = db.transaction(STORE, "readwrite").objectStore(STORE);
@@ -49,6 +56,7 @@
           const rec = g.result || { id, ts: Date.now() };
           rec.blob = blob; rec.ts = Date.now();
           if (name) rec.name = name;
+          if (assetId) rec.assetId = normalizeAssetId(assetId);
           const p = st.put(rec);
           p.onsuccess = () => { notifyProject(); res(id); };
           p.onerror = () => rej(p.error);
@@ -61,6 +69,17 @@
       if (!it) return null;
       const copy = it.blob.slice(0, it.blob.size, it.blob.type || "image/png");
       return Tray.add(copy, dupName(it.name));
+    },
+    async setAssetId(id, value) {
+      const assigned = await uniqueAssetId(value || defaultAssetId(id), id);
+      await setRecordAssetId(id, assigned);
+      notifyProject();
+      return assigned;
+    },
+    async findByAssetIds(values) {
+      const wanted = (values || []).map(normalizeAssetId).filter(Boolean);
+      const items = await ensureAssetIds(await Tray.all());
+      return wanted.map(assetId => items.find(item => normalizeAssetId(item.assetId) === assetId) || null);
     },
     async replaceAll(items) {
       const db = await openDB();
@@ -81,6 +100,47 @@
   window.Tray = Tray;
   function notifyProject() { if (window.ProjectStore) window.ProjectStore.markDirty(); }
   function dupName(n) { const m = String(n || "image.png").match(/^(.*?)(\.[^.]+)?$/); return (m[1] || "image") + " copy" + (m[2] || ".png"); }
+  function defaultAssetId(id) { return `IMG-${String(id).padStart(3, "0")}`; }
+  function normalizeAssetId(value) {
+    return String(value || "").trim().toUpperCase().replace(/\s+/g, "-").replace(/[^A-Z0-9_-]/g, "").slice(0, 32);
+  }
+  async function uniqueAssetId(preferred, ignoreId) {
+    const base = normalizeAssetId(preferred) || defaultAssetId(ignoreId || Date.now());
+    const items = await rawAll();
+    const used = new Set(items.filter(item => item.id !== ignoreId && item.assetId).map(item => normalizeAssetId(item.assetId)));
+    if (!used.has(base)) return base;
+    let suffix = 2;
+    while (used.has(`${base}-${suffix}`)) suffix++;
+    return `${base}-${suffix}`;
+  }
+  function setRecordAssetId(id, assetId) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const db = await openDB();
+        const tx = db.transaction(STORE, "readwrite");
+        const store = tx.objectStore(STORE);
+        const get = store.get(id);
+        get.onsuccess = () => {
+          const record = get.result;
+          if (!record) { resolve(); return; }
+          record.assetId = normalizeAssetId(assetId) || defaultAssetId(id);
+          store.put(record);
+        };
+        get.onerror = () => reject(get.error);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      } catch (error) { reject(error); }
+    });
+  }
+  async function ensureAssetIds(items) {
+    for (const item of items) {
+      if (!item.assetId) {
+        item.assetId = await uniqueAssetId(defaultAssetId(item.id), item.id);
+        await setRecordAssetId(item.id, item.assetId);
+      }
+    }
+    return items;
+  }
 
   // ---------------- UI ----------------
   const css = `
@@ -137,6 +197,9 @@
   .tray-item .pv{display:block!important;width:100%!important;height:auto!important;min-height:0!important;max-height:none!important;padding:0!important;overflow:visible!important;line-height:0!important}
   .tray-item .pv img{display:block!important;width:100%!important;height:auto!important;min-height:0!important;max-width:100%!important;max-height:none!important;object-fit:contain!important;object-position:center!important}
   .tray-item .nm{display:block!important;visibility:visible!important;opacity:1!important;min-height:22px!important;padding:7px 9px 2px!important}
+  .tray-item .asset-row{display:flex;align-items:center;gap:7px;padding:7px 8px 1px;color:#8b93a7;font-size:10px;font-weight:800}
+  .tray-item .asset-id{min-width:0;flex:1;background:#0f1115;border:1px solid #2a3040;color:#2ec3a6;border-radius:6px;padding:7px 8px;font-size:12px;font-weight:900;letter-spacing:.4px;text-transform:uppercase}
+  .tray-item .asset-id:focus{outline:none;border-color:#2ec3a6}
   .tray-item .row{display:flex!important;visibility:visible!important;opacity:1!important;min-height:44px!important}
   .tray-item .cb{position:absolute;top:8px;left:8px;width:22px;height:22px;cursor:pointer;z-index:2}
   .tray-item .row{flex-wrap:wrap}
@@ -204,7 +267,7 @@
       e.preventDefault();
       const id = draggingId; draggingId = null;
       const it = await Tray.get(id);
-      if (it && typeof window.TRAY_IMPORT === "function") { window.TRAY_IMPORT(it.blob, it.name, it.id); close(); }
+      if (it && typeof window.TRAY_IMPORT === "function") { window.TRAY_IMPORT(it.blob, it.name, it.id, it.assetId || defaultAssetId(it.id)); close(); }
     });
   }
 
@@ -212,7 +275,7 @@
   function close() { panel.classList.remove("open"); backdrop.classList.remove("open"); }
 
   async function refresh() {
-    const items = (await Tray.all()).sort((a, b) => b.ts - a.ts);
+    const items = (await ensureAssetIds(await Tray.all())).sort((a, b) => b.ts - a.ts);
     const present = new Set(items.map(i => i.id));
     [...selected].forEach(id => { if (!present.has(id)) selected.delete(id); });
     if (countEl) countEl.textContent = items.length;
@@ -234,6 +297,7 @@
           <input type="checkbox" class="cb" ${selected.has(it.id) ? "checked" : ""} />
           <div class="pv"><img src="${url}" /></div>
         </div>
+        <label class="asset-row">ID <input class="asset-id" value="${escapeHtml(it.assetId)}" maxlength="32" /></label>
         <div class="nm">${escapeHtml(it.name)}</div>
         <div class="row">
           ${canUse ? `<button class="use">${escapeHtml(window.TRAY_USE_LABEL || "Use here")}</button>` : ""}
@@ -249,10 +313,15 @@
         if (selAll) selAll.checked = selected.size === items.length;
       });
       div.querySelector(".dl").addEventListener("click", () => downloadItem(it, url));
+      div.querySelector(".asset-id").addEventListener("change", async event => {
+        const assigned = await Tray.setAssetId(it.id, event.target.value);
+        event.target.value = assigned;
+        it.assetId = assigned;
+      });
       div.querySelector(".dup").addEventListener("click", async () => { await Tray.duplicate(it.id); refresh(); });
       div.querySelector(".rm").addEventListener("click", async () => { selected.delete(it.id); await Tray.remove(it.id); refresh(); });
       const useBtn = div.querySelector(".use");
-      if (useBtn) useBtn.addEventListener("click", () => window.TRAY_IMPORT(it.blob, it.name, it.id));
+      if (useBtn) useBtn.addEventListener("click", () => window.TRAY_IMPORT(it.blob, it.name, it.id, it.assetId));
       listEl.appendChild(div);
     });
   }

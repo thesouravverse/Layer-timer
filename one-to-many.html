@@ -141,6 +141,11 @@
   .piece .prow .btn { flex: 1; padding: 5px; font-size: 11px; justify-content: center; }
   .piece .detail-row { padding: 6px 6px 0; }
   .piece .detail-row .btn { width: 100%; justify-content: center; }
+  .piece-id-row { display: flex; align-items: center; gap: 5px; padding: 6px 6px 0; color: var(--muted); font-size: 9px; font-weight: 800; }
+  .piece-id { min-width: 0; width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--accent-2); border-radius: 6px; padding: 6px; font-size: 11px; font-weight: 900; text-transform: uppercase; }
+  .piece-id:focus { outline: none; border-color: var(--accent-2); }
+  .id-prefix { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 700; }
+  .id-prefix input { width: 62px; background: var(--bg); border: 1px solid var(--line); color: var(--accent-2); border-radius: 6px; padding: 6px; text-transform: uppercase; font-weight: 900; }
 
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 6px; }
@@ -212,6 +217,7 @@
     <aside>
       <div class="res-head">
         <span class="count">Pieces: <b id="pieceCount">0</b></span>
+        <label class="id-prefix">ID prefix <input id="piecePrefix" value="CUT" maxlength="12" /></label>
         <span style="flex:1"></span>
         <button class="btn ghost" id="collapseResults" title="Hide the pieces panel">⟩ Hide</button>
       </div>
@@ -230,8 +236,8 @@
   <button class="btn primary reopen-pieces" id="reopenResults">🧩 Pieces (<span id="reopenCount">0</span>)</button>
   <button class="btn primary fab-cut" id="fabCut">✂ Cut all</button>
 
-<script src="tray.js?v=20260809-project-3"></script>
-<script src="project.js?v=20260809-project-3"></script>
+<script src="tray.js?v=20260809-asset-ids-4"></script>
+<script src="project.js?v=20260809-asset-ids-4"></script>
 <script>
 (() => {
   "use strict";
@@ -293,6 +299,7 @@
     results: document.getElementById("results"),
     resEmpty: document.getElementById("resEmpty"),
     pieceCount: document.getElementById("pieceCount"),
+    piecePrefix: document.getElementById("piecePrefix"),
     downloadAllBtn: document.getElementById("downloadAllBtn"),
     trayAllBtn: document.getElementById("trayAllBtn"),
     sourcesAllBtn: document.getElementById("sourcesAllBtn"),
@@ -408,8 +415,8 @@
 
   // Receive an image from the Tray (e.g. a cutout from Bg Remover)
   window.TRAY_USE_LABEL = "Use as source";
-  window.TRAY_IMPORT = async (blob, name) => {
-    await addSourceBlob(blob, name || "tray-image.png", true);
+  window.TRAY_IMPORT = async (blob, name, trayRecordId, assetId) => {
+    await addSourceBlob(blob, assetId ? `${assetId}-${name || "tray-image.png"}` : (name || "tray-image.png"), true);
     if (window.TrayUI) window.TrayUI.close();
   };
 
@@ -763,8 +770,22 @@
   function addPiece(canvas) {
     const src = sources.find(s => s.id === activeSourceId);
     const stem = String(src?.name || "image").replace(/\.[^.]+$/, "").replace(/[^a-z0-9_-]+/gi, "-").slice(0, 32);
-    pieces.push({ name: `${stem}-piece-${String(pieceId).padStart(3, "0")}.png`, canvas, blob: null, parentSourceId: activeSourceId });
+    const prefix = normalizePieceId(el.piecePrefix.value) || "CUT";
+    pieces.push({ assetId: uniquePieceAssetId(`${prefix}-${String(pieceId).padStart(3, "0")}`), name: `${stem}-piece-${String(pieceId).padStart(3, "0")}.png`, canvas, blob: null, parentSourceId: activeSourceId });
     pieceId++;
+  }
+
+  function normalizePieceId(value) {
+    return String(value || "").trim().toUpperCase().replace(/\s+/g, "-").replace(/[^A-Z0-9_-]/g, "").slice(0, 32);
+  }
+
+  function uniquePieceAssetId(value, currentPiece) {
+    const base = normalizePieceId(value) || `CUT-${String(pieceId).padStart(3, "0")}`;
+    const used = new Set(pieces.filter(piece => piece !== currentPiece).map(piece => normalizePieceId(piece.assetId)).filter(Boolean));
+    if (!used.has(base)) return base;
+    let suffix = 2;
+    while (used.has(`${base}-${suffix}`)) suffix++;
+    return `${base}-${suffix}`;
   }
 
   function cutAll() {
@@ -867,6 +888,7 @@
       const url = pc.canvas.toDataURL("image/png");
       div.innerHTML = `
         <div class="pv"><img src="${url}" /></div>
+        <label class="piece-id-row">ID <input class="piece-id" value="${pc.assetId || `CUT-${String(i + 1).padStart(3, "0")}`}" maxlength="32" /></label>
         <div class="detail-row"><button class="btn detail">✂ Cut again</button></div>
         <div class="prow">
           <button class="btn dl">⤓ Save</button>
@@ -874,7 +896,12 @@
           <button class="btn ghost rm">✕</button>
         </div>`;
       div.querySelector(".dl").addEventListener("click", () => downloadCanvas(pc));
-      div.querySelector(".tray").addEventListener("click", () => window.Tray.addCanvas(pc.canvas, pc.name));
+      div.querySelector(".piece-id").addEventListener("change", event => {
+        pc.assetId = uniquePieceAssetId(event.target.value, pc);
+        event.target.value = pc.assetId;
+        if (window.ProjectStore) window.ProjectStore.markDirty();
+      });
+      div.querySelector(".tray").addEventListener("click", () => window.Tray.addCanvas(pc.canvas, pc.name, pc.assetId));
       div.querySelector(".detail").addEventListener("click", () => pieceToSource(pc, true));
       div.querySelector(".rm").addEventListener("click", () => { pieces.splice(i, 1); renderResults(); });
       el.results.appendChild(div);
@@ -909,7 +936,7 @@
       const create = async blob => {
         try {
           if (!blob) throw new Error("Could not prepare this piece for detailed cutting");
-          const src = await addSourceBlob(blob, pc.name.replace(/\.png$/i, "-detail.png"), activate);
+          const src = await addSourceBlob(blob, `${pc.assetId || "CUT"}-${pc.name.replace(/\.png$/i, "-detail.png")}`, activate);
           pc.editSourceId = src.id;
           if (activate) document.body.classList.add("results-collapsed");
           renderResults();
@@ -937,7 +964,7 @@
   el.trayAllBtn.addEventListener("click", async () => {
     if (!pieces.length) { alert("Nothing to send yet."); return; }
     el.trayAllBtn.disabled = true;
-    for (const pc of pieces) await window.Tray.addCanvas(pc.canvas, pc.name);
+    for (const pc of pieces) await window.Tray.addCanvas(pc.canvas, pc.name, pc.assetId);
     el.trayAllBtn.disabled = false;
     alert("Sent " + pieces.length + " piece(s) to the Tray.");
   });
@@ -1072,6 +1099,7 @@
       if (!piece.blob) piece.blob = await canvasToBlob(piece.canvas);
       return {
         name: piece.name,
+        assetId: piece.assetId || null,
         blob: piece.blob,
         parentSourceId: piece.parentSourceId,
         editSourceId: piece.editSourceId || null,
@@ -1090,6 +1118,7 @@
       rows: el.rows.value,
       cols: el.cols.value,
       penOnly: el.penOnly.checked,
+      piecePrefix: normalizePieceId(el.piecePrefix.value) || "CUT",
       resultsCollapsed: document.body.classList.contains("results-collapsed"),
     };
   }
@@ -1124,6 +1153,7 @@
       if (!saved.blob) continue;
       pieces.push({
         name: saved.name || "piece.png",
+        assetId: saved.assetId || `CUT-${String(pieces.length + 1).padStart(3, "0")}`,
         canvas: await canvasFromBlob(saved.blob),
         blob: saved.blob,
         parentSourceId: saved.parentSourceId,
@@ -1139,6 +1169,7 @@
     el.rows.value = String(state.rows || 3);
     el.cols.value = String(state.cols || 3);
     el.penOnly.checked = !!state.penOnly;
+    el.piecePrefix.value = normalizePieceId(state.piecePrefix) || "CUT";
     [...el.modeToggle.querySelectorAll("button[data-mode]")].forEach(button => button.classList.toggle("active", button.dataset.mode === mode));
     el.gridControls.style.display = mode === "grid" ? "inline-flex" : "none";
     el.overlay.style.cursor = mode === "grid" ? "default" : "crosshair";

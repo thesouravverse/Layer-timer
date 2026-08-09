@@ -745,7 +745,6 @@
     buildLayerImages();
     renderLayers();
     renderStage();
-    if (window.TrayUI) window.TrayUI.close();
   };
 
   document.getElementById("fabPlay")?.addEventListener("click", () => (playing ? pause() : play()));

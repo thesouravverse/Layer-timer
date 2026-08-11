@@ -1,7 +1,7 @@
 // Shared project persistence for Layer Timer Studio.
 // - Autosaves each page's editable state in IndexedDB.
 // - Keeps state intact while navigating between the three pages.
-// - Exports/imports a portable .layerproject JSON file including all image Blobs and Tray items.
+// - Exports/imports a portable, human-readable .json file including all image Blobs and Tray items.
 (function () {
   "use strict";
 
@@ -201,20 +201,22 @@
         format: FORMAT,
         version: FORMAT_VERSION,
         name,
+        description: "Layer Timer Studio project. Page settings are readable JSON; embedded images use Base64 so this single file remains portable.",
+        imageEncoding: "Base64",
         exportedAt: new Date().toISOString(),
         pages: await getAllPages(),
         tray: window.Tray ? await window.Tray.all() : [],
       };
       const encoded = await encodeValue(payload);
-      const blob = new Blob([JSON.stringify(encoded)], { type: "application/json" });
+      const blob = new Blob([JSON.stringify(encoded, null, 2) + "\n"], { type: "application/json" });
       const anchor = document.createElement("a");
       anchor.href = URL.createObjectURL(blob);
-      anchor.download = sanitizeFilename(name) + ".layerproject";
+      anchor.download = sanitizeFilename(name) + ".json";
       anchor.style.display = "none";
       document.body.appendChild(anchor);
       anchor.click();
       setTimeout(() => { URL.revokeObjectURL(anchor.href); anchor.remove(); }, 5000);
-      setStatus("Project file saved", "ok");
+      setStatus("Project JSON saved", "ok");
     } catch (error) {
       console.error("Project export failed", error);
       setStatus("Project export failed: " + (error.message || error), "error");
@@ -234,7 +236,7 @@
       }
       await replacePages(payload.pages || []);
       if (window.Tray && window.Tray.replaceAll) await window.Tray.replaceAll(payload.tray || []);
-      setProjectName(payload.name || file.name.replace(/\.layerproject$/i, ""));
+      setProjectName(payload.name || file.name.replace(/\.(?:layerproject|json)$/i, ""));
       location.reload();
     } catch (error) {
       console.error("Project import failed", error);
@@ -306,14 +308,14 @@
         <div class="project-body">
           <label>Project name<input class="project-name" type="text" maxlength="80"></label>
           <div class="project-grid">
-            <button class="project-save" type="button">Save project file</button>
-            <button class="project-open" type="button">Open project file</button>
+            <button class="project-save" type="button">Save project JSON</button>
+            <button class="project-open" type="button">Open project JSON</button>
             <button class="project-save-now" type="button">Autosave now</button>
             <button class="project-new" type="button">New project</button>
           </div>
-          <div class="project-note">Autosave preserves each page while you switch between Layer Timer, One → Many, and Bg Remover. A <b>.layerproject</b> file also includes all Tray and image data for backup or reopening later.</div>
+          <div class="project-note">Autosave preserves each page while you switch between Layer Timer, One → Many, and Bg Remover. The readable <b>.json</b> project also includes all Tray and image data. Image bytes appear as Base64 text because JSON cannot store binary data directly.</div>
           <div class="project-status">Preparing autosave…</div>
-          <input class="project-file" type="file" accept=".layerproject,application/json" hidden>
+          <input class="project-file" type="file" accept=".json,.layerproject,application/json" hidden>
         </div>
       </div>`;
     document.body.appendChild(backdrop);
